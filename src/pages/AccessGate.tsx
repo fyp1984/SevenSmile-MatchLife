@@ -33,12 +33,13 @@ export default function AccessGate() {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    const input = code.trim();
     if (isLocalhost()) {
       setGateAccessOk();
       nav(nextPath);
       return;
     }
-    if (code === PASSCODE) {
+    if (input === PASSCODE) {
       setGateAccessOk();
       nav(nextPath);
       return;
@@ -82,4 +83,3 @@ export default function AccessGate() {
     </div>
   );
 }
-
