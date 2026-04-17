@@ -5,6 +5,17 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>比赛生涯</title>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var p = params.get('p');
+        if (!p) return;
+        params.delete('p');
+        var rest = params.toString();
+        var next = p + (rest ? (p.indexOf('?') >= 0 ? '&' : '?') + rest : '');
+        window.history.replaceState(null, '', next);
+      })();
+    </script>
     <script type="module">
       if (import.meta.hot?.on) {
         import.meta.hot.on('vite:error', (error) => {

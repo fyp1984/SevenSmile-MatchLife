@@ -91,6 +91,28 @@ pnpm reset:db
 
 - 线上手动同步依赖 Supabase Edge Function；Vercel 部署本身不包含 `/api/*`（仅本地 `pnpm dev` 生效）。
 
+### GitHub Pages（不依赖 Vercel）
+
+仓库已内置 GitHub Pages 的自动部署工作流（推送 `main` 后自动构建并发布）。
+
+需要在 GitHub 仓库的 Secrets 中配置：
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+然后在仓库 Settings → Pages 中将 Source 设为 GitHub Actions。
+
+### 国内自建（推荐）
+
+该项目是纯静态前端（Vite 构建产物在 `dist/`），可部署到任意国内服务器/CDN：
+
+- 方案 A：腾讯云 COS / 阿里云 OSS / 七牛云 等对象存储 + CDN
+  - 上传 `dist/` 全量文件
+  - 默认首页：`index.html`
+  - SPA 路由：配置“404 回源到 `index.html`”或等价的重写规则
+- 方案 B：Nginx 静态托管
+  - `try_files $uri $uri/ /index.html;` 以支持前端路由
+
 ## 安全提示
 
 - 不要将 `SUPABASE_SERVICE_ROLE_KEY` 写入可提交文件（请使用 `.env.local`）。
