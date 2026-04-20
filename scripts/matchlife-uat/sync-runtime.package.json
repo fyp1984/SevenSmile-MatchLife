@@ -1,0 +1,13 @@
+{
+  "name": "matchlife-sync-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "dotenv": "^17.4.2"
+  }
+}

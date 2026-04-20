@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Trophy, Calendar, MapPin, Activity, Loader2 } from 'lucide-react';
+import React, { useRef, useState, useEffect } from 'react';
+import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 
@@ -8,6 +8,10 @@ type MatchRow = {
   category: string;
   tournament_name: string;
   start_time: string | null;
+  source_updated_at: string | null;
+  match_started_at: string | null;
+  match_ended_at: string | null;
+  round_name: string | null;
   match_time_name: string | null;
   city: string | null;
   location: string | null;
@@ -28,15 +32,79 @@ type SyncRunRow = {
   error_message: string | null;
 };
 
+const MATCH_SELECT =
+  'id, category, tournament_name, start_time, source_updated_at, match_started_at, match_ended_at, match_time_name, city, location, players_a, players_b, score_text, winner_side, event_key, round_name';
+
 export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [searched, setSearched] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncRunRow | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recentQueries, setRecentQueries] = useState<string[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const inFlightRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
+  const lastMatchesSignatureRef = useRef('');
+  const searchCacheRef = useRef<Map<string, MatchRow[]>>(new Map());
+
+  const matchTs = (m: MatchRow) => {
+    const t1 = m.start_time ? Date.parse(m.start_time) : NaN;
+    if (!Number.isNaN(t1)) return t1;
+    const t2 = m.source_updated_at ? Date.parse(m.source_updated_at) : NaN;
+    if (!Number.isNaN(t2)) return t2;
+    return 0;
+  };
+
+  const sortMatches = (list: MatchRow[]) => {
+    return [...list].sort((a, b) => matchTs(b) - matchTs(a));
+  };
+
+  const matchesSignature = (list: MatchRow[]) => {
+    return list
+      .map((match) => [
+        match.id,
+        match.source_updated_at || '',
+        match.match_started_at || '',
+        match.match_ended_at || '',
+        match.score_text || '',
+        match.winner_side || '',
+      ].join('|'))
+      .join('||');
+  };
+
+  const applyMatches = (list: MatchRow[]) => {
+    const next = sortMatches(list);
+    const signature = matchesSignature(next);
+    if (signature === lastMatchesSignatureRef.current) return;
+    lastMatchesSignatureRef.current = signature;
+    setMatches(next);
+  };
+
+  const fmtDate = (iso: string | null) => {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return null;
+    return format(new Date(t), 'yyyy-MM-dd');
+  };
+
+  const fmtTime = (iso: string | null) => {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return null;
+    return format(new Date(t), 'HH:mm:ss');
+  };
+
+  const ongoingMeta = (m: MatchRow) => {
+    const dateBase = m.match_started_at || m.start_time || null;
+    return {
+      date: fmtDate(dateBase),
+      startedAt: fmtTime(m.match_started_at),
+      endedAt: fmtTime(m.match_ended_at),
+    };
+  };
 
   // 初次加载时，拉取最新的几条比赛数据与同步状态
   useEffect(() => {
@@ -66,14 +134,56 @@ export default function Home() {
     if (!autoRefresh) return;
     if (!searchQuery.trim()) return;
 
-    const timer = window.setInterval(() => {
-      handleSearch(undefined, searchQuery, { recordHistory: false });
+    const fallbackTimer: number = window.setInterval(() => {
+      if (document.hidden) return;
+      handleSearch(undefined, searchQuery, { recordHistory: false, silent: true });
     }, 5000);
 
+    const channel = supabase
+      .channel(`ml_home_matches_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'matches' },
+        () => {
+          if (document.hidden) return;
+          if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = window.setTimeout(() => {
+            handleSearch(undefined, searchQuery, { recordHistory: false, silent: true });
+          }, 300);
+        }
+      )
+      .subscribe();
+
     return () => {
-      window.clearInterval(timer);
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      window.clearInterval(fallbackTimer);
+      supabase.removeChannel(channel);
     };
   }, [autoRefresh, searchQuery]);
+
+  const lastSyncFetchAtRef = useRef<number>(0);
+  useEffect(() => {
+    const channel = supabase
+      .channel(`ml_home_sync_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'sync_runs' },
+        () => {
+          const now = Date.now();
+          if (now - lastSyncFetchAtRef.current < 500) return;
+          lastSyncFetchAtRef.current = now;
+          fetchSyncStatus();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const persistRecentQueries = (next: string[]) => {
     const trimmed = next.map((s) => s.trim()).filter(Boolean);
@@ -86,78 +196,163 @@ export default function Home() {
     localStorage.setItem('matchlife_recent_queries', JSON.stringify(uniq));
   };
 
+  const canAutoRefresh = Boolean(searchQuery.trim());
+
   const fetchSyncStatus = async () => {
     const { data, error } = await supabase
       .from('sync_runs')
       .select('*')
       .order('run_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     if (error) {
       setErrorMsg(error.message);
       return;
     }
-    if (data) setSyncStatus(data as SyncRunRow);
+    setSyncStatus((data as SyncRunRow | null) ?? null);
   };
 
-  const fetchLatestMatches = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
+  const fetchLatestMatches = async (options?: { silent?: boolean }) => {
+    if (options?.silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    const request = supabase
       .from('matches')
-      .select('*')
-      .order('start_time', { ascending: false })
+      .select(MATCH_SELECT)
+      .order('source_updated_at', { ascending: false, nullsFirst: false })
       .limit(5);
+    const { data, error } = await Promise.race([
+      request,
+      new Promise<{ data: null; error: Error }>((resolve) => {
+        window.setTimeout(() => resolve({ data: null, error: new Error('查询超时，请稍后重试。') }), 10_000);
+      }),
+    ]);
 
     if (error) setErrorMsg(error.message);
-    if (data) setMatches(data as MatchRow[]);
-    setLoading(false);
+    if (data) applyMatches(data as MatchRow[]);
+    if (options?.silent) {
+      setRefreshing(false);
+    } else {
+      setLoading(false);
+    }
   };
 
   const handleSearch = async (
     e?: React.FormEvent,
     q?: string,
-    options?: { recordHistory?: boolean }
+    options?: { recordHistory?: boolean; silent?: boolean }
   ) => {
     if (e) e.preventDefault();
     const keyword = (q ?? searchQuery).trim();
     setErrorMsg(null);
     if (!keyword) {
       setSearched(false);
-      fetchLatestMatches();
+      fetchLatestMatches(options);
       return;
     }
 
     if (options?.recordHistory !== false) {
       persistRecentQueries([keyword, ...recentQueries]);
     }
-
-    setLoading(true);
-    setSearched(true);
-    
-    const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
-    const { data, error } = await supabase
-      .from('matches')
-      .select('*')
-      .or(
-        [
-          `tournament_name.ilike.%${escaped}%`,
-          `city.ilike.%${escaped}%`,
-          `location.ilike.%${escaped}%`,
-          `match_time_name.ilike.%${escaped}%`,
-          `players_text.ilike.%${escaped}%`,
-          `score_text.ilike.%${escaped}%`,
-          `category.ilike.%${escaped}%`,
-          `event_key.ilike.%${escaped}%`,
-        ].join(',')
-      )
-      .order('start_time', { ascending: false })
-      .limit(20);
-
-    if (error) setErrorMsg(error.message);
-    if (data) {
-      setMatches(data as MatchRow[]);
+    const cacheKey = keyword.toLowerCase();
+    const cached = searchCacheRef.current.get(cacheKey);
+    if (cached?.length) {
+      applyMatches(cached);
+      setSearched(true);
+      if (options?.silent) {
+        setRefreshing(false);
+        return;
+      }
     }
-    setLoading(false);
+
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (options?.silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+      setSearched(true);
+    }
+    try {
+      const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
+      const primaryRequest = supabase
+        .from('matches')
+        .select(MATCH_SELECT)
+        .or(
+          [
+            `tournament_name.ilike.%${escaped}%`,
+            `players_text.ilike.%${escaped}%`,
+            `event_key.ilike.%${escaped}%`,
+          ].join(',')
+        )
+        .order('source_updated_at', { ascending: false, nullsFirst: false })
+        .limit(20);
+      const primary = await Promise.race([
+        primaryRequest,
+        new Promise<{ data: null; error: Error }>((resolve) => {
+          window.setTimeout(() => resolve({ data: null, error: new Error('检索超时，请缩短关键词后重试。') }), 5_000);
+        }),
+      ]);
+
+      if (primary.error) {
+        setErrorMsg(primary.error.message);
+      } else if (primary.data) {
+        const primaryRows = primary.data as MatchRow[];
+        if (primaryRows.length >= 8) {
+          applyMatches(primaryRows);
+          searchCacheRef.current.set(cacheKey, primaryRows);
+          return;
+        }
+
+        const secondaryRequest = supabase
+          .from('matches')
+          .select(MATCH_SELECT)
+          .or(
+            [
+              `round_name.ilike.%${escaped}%`,
+              `match_time_name.ilike.%${escaped}%`,
+              `category.ilike.%${escaped}%`,
+              `city.ilike.%${escaped}%`,
+              `location.ilike.%${escaped}%`,
+            ].join(',')
+          )
+          .order('source_updated_at', { ascending: false, nullsFirst: false })
+          .limit(20);
+        const secondary = await Promise.race([
+          secondaryRequest,
+          new Promise<{ data: null; error: Error }>((resolve) => {
+            window.setTimeout(() => resolve({ data: null, error: new Error('检索超时，请稍后重试。') }), 6_000);
+          }),
+        ]);
+        if (secondary.error) {
+          setErrorMsg(secondary.error.message);
+          applyMatches(primaryRows);
+          searchCacheRef.current.set(cacheKey, primaryRows);
+          return;
+        }
+
+        const secondaryRows = (secondary.data || []) as MatchRow[];
+        const merged = [...primaryRows];
+        const seen = new Set(primaryRows.map((item) => item.id));
+        for (const row of secondaryRows) {
+          if (!seen.has(row.id)) {
+            merged.push(row);
+            seen.add(row.id);
+          }
+        }
+        applyMatches(merged.slice(0, 20));
+        searchCacheRef.current.set(cacheKey, merged.slice(0, 20));
+      }
+    } finally {
+      inFlightRef.current = false;
+      if (options?.silent) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
+    }
   };
 
   return (
@@ -169,7 +364,7 @@ export default function Home() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
           </span>
-          U系列比赛数据实时更新中
+          多平台赛事数据持续接入中
         </div>
 
         {syncStatus && (
@@ -178,17 +373,17 @@ export default function Home() {
           </div>
         )}
         
-        <h1 className="text-4xl md:text-6xl font-extrabold text-brand-brown tracking-tight">
+        <h1 className="text-3xl sm:text-4xl md:text-6xl font-extrabold text-brand-brown tracking-tight">
           <span className="block mb-2">探索你的</span>
           <span className="bg-gradient-to-br from-orange-500 to-red-600 bg-clip-text text-transparent">
-            比赛生涯轨迹
+            赛事数据轨迹
           </span>
         </h1>
         
-        <p className="text-lg text-brand-gray max-w-2xl mx-auto font-medium">
-          极简、纯粹的体育赛事数据查询工具。
+        <p className="max-w-2xl mx-auto text-base font-medium text-brand-gray sm:text-lg">
+          面向多赛事、多平台的数据查询与展示平台。
           <br />
-          快速检索选手成绩、近期赛况与排名分析等。
+          快速检索比赛结果、实时赛况、赛事排名与历史记录。
         </p>
 
         <form onSubmit={handleSearch} className="relative mt-8 group">
@@ -202,24 +397,49 @@ export default function Home() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索赛事名称、运动员名称、赛事日期..."
-              className="w-full px-4 py-3 text-lg bg-transparent border-none focus:ring-0 outline-none text-brand-brown placeholder-orange-300 font-medium"
+              className="w-full border-none bg-transparent px-4 py-3 text-base font-medium text-brand-brown outline-none placeholder-orange-300 focus:ring-0 sm:text-lg"
             />
-            <label className={`flex items-center gap-2 px-3 py-2 rounded-full border ${
-              searchQuery.trim()
-                ? 'border-orange-200 text-orange-700 hover:bg-orange-50'
-                : 'border-gray-200 text-gray-400 cursor-not-allowed'
-            } transition-colors mr-2 select-none`}
+            <button
+              type="button"
+              aria-label={
+                canAutoRefresh
+                  ? `${autoRefresh ? '关闭' : '开启'}自动刷新比分`
+                  : '请输入检索内容后开启自动刷新'
+              }
+              aria-pressed={autoRefresh}
+              title={
+                canAutoRefresh
+                  ? `${autoRefresh ? '自动刷新进行中，点击关闭' : '点击开启自动刷新比分'}`
+                  : '请输入检索内容后开启自动刷新'
+              }
+              disabled={!canAutoRefresh}
+              onClick={() => setAutoRefresh((v) => !v)}
+              className={`group relative mr-2 inline-flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full border transition-all duration-300 ${
+                canAutoRefresh
+                  ? autoRefresh
+                    ? 'border-orange-200 bg-gradient-to-br from-orange-500 to-red-500 text-white shadow-lg shadow-orange-200/70'
+                    : 'border-orange-200 bg-white text-orange-500 shadow-sm hover:-translate-y-0.5 hover:border-orange-300 hover:bg-orange-50 hover:shadow-md'
+                  : 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-300 shadow-none'
+              }`}
             >
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                disabled={!searchQuery.trim()}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
+              <span
+                className={`pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full ${
+                  autoRefresh ? 'bg-emerald-300 shadow-[0_0_0_3px_rgba(255,255,255,0.18)]' : 'bg-gray-200'
+                }`}
               />
-              <span className="text-sm font-bold">自动刷新</span>
-            </label>
+              <RefreshCw
+                className={`h-5 w-5 transition-transform duration-300 ${
+                  autoRefresh ? 'animate-spin' : 'rotate-0'
+                } ${refreshing && autoRefresh ? 'scale-110' : ''}`}
+              />
+              <span className="sr-only">
+                {autoRefresh ? '自动刷新已开启' : '自动刷新已关闭'}
+              </span>
+            </button>
             <button 
               type="submit"
+              title="提交检索"
+              aria-label="提交检索"
               disabled={loading}
               className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-8 py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center min-w-[120px]"
             >
@@ -270,16 +490,40 @@ export default function Home() {
               <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
             </div>
           ) : matches.length > 0 ? (
-            matches.map((match) => (
-              <div key={match.id} className="bg-white rounded-3xl p-6 shadow-sm border border-orange-50 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow">
+            matches.map((match, idx) => (
+              <div
+                key={match.id}
+                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow ${
+                  match.winner_side === 'UNKNOWN'
+                    ? 'bg-sky-50/60 border-sky-100'
+                    : 'bg-white border-orange-50'
+                }`}
+              >
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-bold">{match.category}</span>
+                    {match.round_name && (
+                      <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-extrabold">{match.round_name}</span>
+                    )}
                     <span className="text-sm text-brand-gray">
                       {match.start_time ? format(new Date(match.start_time), 'yyyy-MM-dd HH:mm') : (match.match_time_name || '-')}
                     </span>
                   </div>
                   <h3 className="text-lg font-bold text-brand-brown">{match.tournament_name}</h3>
+                  {match.winner_side === 'UNKNOWN' && (
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-sky-700/80 mt-2 font-medium">
+                      {(() => {
+                        const m = ongoingMeta(match);
+                        return (
+                          <>
+                            {m.date ? <span>日期 {m.date}</span> : null}
+                            {m.startedAt ? <span>开始 {m.startedAt}</span> : null}
+                            {m.endedAt ? <span>结束 {m.endedAt}</span> : null}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1 text-sm text-brand-gray mt-1">
                     <MapPin className="w-4 h-4" />
                     <span>{match.city || match.location || '未知场地'}</span>
@@ -321,9 +565,9 @@ export default function Home() {
           <div className="w-12 h-12 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-500 mb-4">
             <Trophy className="w-6 h-6" />
           </div>
-          <h3 className="text-xl font-bold text-brand-brown mb-2">全面覆盖</h3>
+          <h3 className="text-xl font-bold text-brand-brown mb-2">平台化扩展</h3>
           <p className="text-brand-gray text-sm">
-            从 U 系列开始，逐步涵盖各类专业与业余羽毛球赛事数据，一站式查询。
+            从当前已接入赛事出发，持续扩展到更多赛事平台与不同球类数据，一站式查询。
           </p>
         </div>
         
@@ -333,7 +577,7 @@ export default function Home() {
           </div>
           <h3 className="text-xl font-bold text-brand-brown mb-2">实时赛况</h3>
           <p className="text-brand-gray text-sm">
-            正在进行中的比赛成绩实时同步，不错过任何一个关键比分和晋级时刻。
+            对正在进行中的比赛持续追踪与更新，帮助你更快掌握比分变化与晋级进展。
           </p>
         </div>
         
@@ -341,9 +585,9 @@ export default function Home() {
           <div className="w-12 h-12 rounded-2xl bg-green-100 flex items-center justify-center text-green-500 mb-4">
             <Calendar className="w-6 h-6" />
           </div>
-          <h3 className="text-xl font-bold text-brand-brown mb-2">生涯记录</h3>
+          <h3 className="text-xl font-bold text-brand-brown mb-2">跨赛事档案</h3>
           <p className="text-brand-gray text-sm">
-            沉淀个人历史参赛数据，形成专属的运动生涯档案与胜率统计分析。
+            沉淀运动员与赛事的历史数据，逐步形成跨赛事、跨项目的长期档案与统计分析。
           </p>
         </div>
       </div>

@@ -4,14 +4,15 @@ import { useLocation, useNavigate } from 'react-router-dom';
 const PASSCODE = '7%K$QJ2pWtgw';
 const SESSION_KEY = 'matchlife_gate_ok';
 
-function isLocalhost() {
+export function shouldBypassGate() {
+  if (typeof window === 'undefined') return true;
   const host = window.location.hostname;
-  return host === 'localhost' || host === '127.0.0.1';
+  return import.meta.env.DEV || host === 'localhost' || host === '127.0.0.1';
 }
 
 export function hasGateAccess() {
   if (typeof window === 'undefined') return true;
-  if (isLocalhost()) return true;
+  if (shouldBypassGate()) return true;
   return sessionStorage.getItem(SESSION_KEY) === '1';
 }
 
@@ -34,7 +35,7 @@ export default function AccessGate() {
     e.preventDefault();
     setError(null);
     const input = code.trim();
-    if (isLocalhost()) {
+    if (shouldBypassGate()) {
       setGateAccessOk();
       nav(nextPath);
       return;
@@ -76,8 +77,6 @@ export default function AccessGate() {
           >
             进入数据状态
           </button>
-
-          <div className="text-xs text-brand-gray text-center">本机 localhost 调试环境自动放行</div>
         </form>
       </div>
     </div>

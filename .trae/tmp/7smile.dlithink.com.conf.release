@@ -1,0 +1,92 @@
+server {
+  listen 80;
+  listen [::]:80;
+  server_name 7smile.dlithink.com;
+
+  server_tokens off;
+
+  location = /MP_verify_UdMXQADR6zO5Q06E.txt {
+    root /var/www/7smile.dlithink.com;
+    default_type text/plain;
+    try_files $uri =404;
+  }
+
+  location ^~ /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  server_name 7smile.dlithink.com;
+
+  server_tokens off;
+
+  ssl_certificate /etc/nginx/ssl/7smile.dlithink.com/7smile.dlithink.com_bundle.pem;
+  ssl_certificate_key /etc/nginx/ssl/7smile.dlithink.com/7smile.dlithink.com.key;
+
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+  ssl_prefer_server_ciphers off;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_timeout 1d;
+  ssl_session_tickets off;
+
+  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-XSS-Protection "1; mode=block" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+  gzip on;
+  gzip_vary on;
+  gzip_proxied any;
+  gzip_comp_level 6;
+  gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml application/xml;
+  gzip_min_length 1000;
+
+  location = /MP_verify_UdMXQADR6zO5Q06E.txt {
+    root /var/www/7smile.dlithink.com;
+    default_type text/plain;
+    try_files $uri =404;
+  }
+
+  location = / {
+    return 302 /match-life/;
+  }
+
+  location = /match-life {
+    return 301 /match-life/;
+  }
+
+  location ^~ /api/wechat/ {
+    proxy_pass http://127.0.0.1:18765;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+
+  location ^~ /match-life/assets/ {
+    alias /var/www/7smile.dlithink.com/match-life/assets/;
+    expires 30d;
+    access_log off;
+    add_header Cache-Control "public, immutable";
+    try_files $uri =404;
+  }
+
+  location ^~ /match-life/ {
+    alias /var/www/7smile.dlithink.com/match-life/;
+    index index.html;
+    try_files $uri $uri/ /match-life/index.html;
+  }
+
+  access_log /var/log/nginx/7smile.dlithink.com.access.log;
+  error_log /var/log/nginx/7smile.dlithink.com.error.log warn;
+}

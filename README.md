@@ -9,12 +9,15 @@
 - **自动刷新**：输入关键字后支持 5 秒自动刷新检索结果（用于跟踪进行中的比赛）。
 - **赛事统计看板**：汇总比赛总量、参赛人数、赛事覆盖、已完赛数量；并提供按项目/组别切换的胜场榜与胜率。
 - **同步监控**：展示最近 10 次同步运行记录（成功/失败、拉取条数、入库条数、错误信息）。
+- **关注校验（弱）**：非本机环境需要在微信内完成关注验证，未关注用户会被引导关注后再进入。
 
 ## 页面入口
 
 - `/`：首页（搜索 + 近期比赛 + 同步状态摘要）
 - `/stats`：统计看板
 - `/sync`：同步状态与手动触发同步（本地支持 `/api/*`，线上建议走 Supabase Edge Function）
+- `/gate/wechat`：微信关注验证入口（通常无需手动访问）
+- `/follow`：未关注引导页
 
 ## 技术栈
 
@@ -24,6 +27,7 @@
 - 同步：
   - 本地：Vite dev server 内置 `/api/sync`、`/api/reset`（需要 `SUPABASE_SERVICE_ROLE_KEY`）
   - 线上：Supabase Edge Function `sync-ymq`（需要在 Supabase 中配置环境变量）
+- 访问控制（弱校验）：Vercel Serverless Functions `/api/wechat/*`（OAuth + subscribe 校验）
 
 ## 快速开始
 
@@ -53,6 +57,18 @@ cp .env.example .env.local
 pnpm dev
 ```
 
+若本机存在代理（例如 `127.0.0.1:8118`），建议先绕过代理再启动：
+
+```bash
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY pnpm dev
+```
+
+可先执行连通性诊断：
+
+```bash
+pnpm diag:supabase
+```
+
 ## 数据库与同步说明
 
 ### Supabase 数据结构
@@ -60,14 +76,27 @@ pnpm dev
 - `matches`：比赛明细（包含 `players_a/players_b`、`score_text`、`winner_side`、`event_key` 等）
 - `sync_runs`：同步运行记录（成功/失败、拉取条数、入库条数、错误信息等）
 
-数据库初始化 SQL 位于 `supabase/migrations/`，可在 Supabase SQL Editor 中按文件顺序执行。
+数据库迁移 SQL 位于 `supabase/migrations/`，现已统一为 Supabase CLI 标准时间戳命名：
+
+```text
+<timestamp>_<name>.sql
+```
+
+推荐使用以下流程管理数据库变更：
+
+```bash
+supabase migration list
+supabase db push
+```
+
+如需新增迁移，请继续沿用标准时间戳文件名，不要再使用无时间戳的 SQL 文件名，以避免后续 `supabase db push` 无法识别。
 
 ### 线上同步（推荐）
 
 部署 `supabase/functions/sync-ymq` 后，通过页面 `/sync` 或直接调用 Edge Function 触发同步：
 
 - 函数名：`sync-ymq`
-- 依赖环境变量：`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`
+- 依赖环境变量：`SUPABASE_URL`/`PROJECT_URL`、`SUPABASE_SERVICE_ROLE_KEY`/`SERVICE_ROLE_KEY`
 
 ### 本地同步（仅开发调试）
 
@@ -89,7 +118,17 @@ pnpm reset:db
 
 当前仓库包含 `vercel.json`，可直接部署静态站点（输出目录 `dist`）。
 
-- 线上手动同步依赖 Supabase Edge Function；Vercel 部署本身不包含 `/api/*`（仅本地 `pnpm dev` 生效）。
+- 线上手动同步依赖 Supabase Edge Function。
+- 线上微信关注校验依赖 Vercel Serverless Functions（`/api/wechat/oauth-start`、`/api/wechat/oauth-callback`）。
+
+### 微信关注校验（弱校验）上线配置
+
+需要在 Vercel Project → Environment Variables 中配置：
+
+- `WECHAT_MP_APPID`
+- `WECHAT_MP_SECRET`
+
+并在公众号后台配置「网页授权域名」为你的线上域名（例如 Vercel 的 Production Domain，不要带 `https://`）。
 
 ### GitHub Pages（不依赖 Vercel）
 

@@ -27,11 +27,34 @@ type MatchRow = Record<string, unknown> & {
   scoreStartTime?: number;
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+type PostgrestResult<T> = { data: T | null; error: unknown };
 
-// 初始化 Supabase Server 客户端（绕过 RLS）
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+type PostgrestQuery<T> = {
+  select: (cols: string) => PostgrestQuery<T>;
+  insert: (values: Record<string, unknown> | Array<Record<string, unknown>>) => Promise<PostgrestResult<T>>;
+  delete: () => PostgrestQuery<T>;
+  eq: (col: string, val: unknown) => PostgrestQuery<T>;
+  not: (col: string, op: string, val: string) => PostgrestQuery<T>;
+  order: (col: string, opts: { ascending: boolean }) => PostgrestQuery<T>;
+  limit: (n: number) => PostgrestQuery<T> & PromiseLike<PostgrestResult<T>>;
+} & PromiseLike<PostgrestResult<T>>;
+
+type SupabaseAdmin = {
+  from: (table: string) => PostgrestQuery<unknown>;
+  rpc: (fn: string, args: Record<string, unknown>) => Promise<PostgrestResult<unknown>>;
+};
+
+function getEnv(name: string): string {
+  return (Deno.env.get(name) || "").trim();
+}
+
+function getSupabaseAdmin() {
+  const url = getEnv("SUPABASE_URL") || getEnv("PROJECT_URL");
+  const serviceRoleKey = getEnv("SUPABASE_SERVICE_ROLE_KEY") || getEnv("SERVICE_ROLE_KEY");
+  if (!url) throw new Error("Missing env: SUPABASE_URL / PROJECT_URL");
+  if (!serviceRoleKey) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY / SERVICE_ROLE_KEY");
+  return createClient(url, serviceRoleKey);
+}
 
 const YMQ_COURTS_URL = "https://race.ymq.me/webservice/appWxRace/courts.do";
 const YMQ_MATCHES_URL = "https://race.ymq.me/webservice/appWxMatch/matchesScore.do";
@@ -96,6 +119,18 @@ function formatScore(row: MatchRow): string | null {
   return null;
 }
 
+function parseRoundName(row: MatchRow): string | null {
+  const rulesName = String(row['rulesName'] ?? '').trim();
+  if (rulesName) return rulesName;
+
+  const fullName = String(row['fullName'] ?? '').trim();
+  const m = fullName.match(/(\d{1,3}\s*进\s*\d{1,3})/);
+  if (m && m[1]) return m[1].replace(/\s+/g, '');
+  if (fullName.includes('半决赛')) return '半决赛';
+  if (fullName.includes('决赛')) return '决赛';
+  return null;
+}
+
 function names(list?: Array<{ name?: string }>): string[] {
   if (!Array.isArray(list)) return [];
   return list.map((p) => (p?.name || "").trim()).filter(Boolean);
@@ -109,7 +144,7 @@ function parseEventKey(row: MatchRow): { ageYears: number | null; itemName: stri
 
   let item = itemNameRaw;
   if (!item) {
-    const m = fullName.match(/\d{1,2}\s*岁\s*([^\s[]+)/);
+    const m = fullName.match(/\d{1,2}\s*岁\s*([^\s\x5B]+)/);
     if (m && m[1]) item = m[1].trim();
   }
 
@@ -120,6 +155,33 @@ function parseEventKey(row: MatchRow): { ageYears: number | null; itemName: stri
 
   const eventKey = ageYears && normalizedItem ? `${ageYears}岁${normalizedItem}` : normalizedItem || null;
   return { ageYears, itemName: item || null, eventKey };
+}
+
+async function cleanupSyncRuns(supabase: unknown, source: string) {
+  type SyncRunIdRow = { id: number } | { id: string };
+  const sb = supabase as SupabaseAdmin;
+
+  const { data: keepRowsAny, error: keepErr } = await sb
+    .from("sync_runs")
+    .select("id")
+    .eq("source", source)
+    .order("run_at", { ascending: false })
+    .limit(5);
+  if (keepErr) throw keepErr;
+
+  const keepRows = Array.isArray(keepRowsAny) ? (keepRowsAny as SyncRunIdRow[]) : [];
+  const keepIds = keepRows
+    .map((r: SyncRunIdRow) => ('id' in r ? r.id : null))
+    .filter((v: SyncRunIdRow['id'] | null): v is SyncRunIdRow['id'] => v !== null);
+  if (keepIds.length === 0) return;
+
+  const inList = `(${keepIds.join(',')})`;
+  const { error: delErr } = await sb
+    .from("sync_runs")
+    .delete()
+    .eq("source", source)
+    .not("id", "in", inList);
+  if (delErr) throw delErr;
 }
 
 async function listCourts(raceId: number): Promise<Court[]> {
@@ -154,7 +216,7 @@ async function fetchMatchesPage(args: {
   return { rows, total };
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
       headers: corsHeaders(),
@@ -162,6 +224,7 @@ serve(async (req) => {
   }
 
   try {
+    const supabase = getSupabaseAdmin() as SupabaseAdmin;
     const url = new URL(req.url);
     let body: unknown = null;
     if (req.method === 'POST') {
@@ -233,6 +296,16 @@ serve(async (req) => {
           ? new Date(row.raceTimestamp).toISOString()
           : null;
 
+      const matchStartedAt =
+        typeof row.scoreStartTime === "number"
+          ? new Date(row.scoreStartTime).toISOString()
+          : null;
+
+      const matchEndedAt =
+        typeof row.scoreEndTime === "number"
+          ? new Date(row.scoreEndTime).toISOString()
+          : null;
+
       const sourceUpdatedAt =
         typeof row.scoreEndTime === "number"
           ? new Date(row.scoreEndTime).toISOString()
@@ -243,6 +316,7 @@ serve(async (req) => {
       const rawHash = await sha1(JSON.stringify(row));
 
       const { ageYears, itemName, eventKey } = parseEventKey(row);
+      const roundName = parseRoundName(row);
 
       records.push({
         source: "ymq",
@@ -250,11 +324,14 @@ serve(async (req) => {
         category: row.groupName || "U",
         tournament_name: tournamentName,
         start_time: startTime,
+        match_started_at: matchStartedAt,
+        match_ended_at: matchEndedAt,
         location: row.courtName || null,
         city: null,
         court_num: row.courtNum ?? null,
         match_no: row.raceTimeNum ?? null,
         match_time_name: row.raceTimeName ?? null,
+        round_name: roundName,
         players_a: playersA,
         players_b: playersB,
         players_text: playersText,
@@ -289,6 +366,8 @@ serve(async (req) => {
       error_message: `mode=${mode}; validated=${records.length}; invalid=${invalidCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}`,
     });
 
+    await cleanupSyncRuns(supabase, "ymq");
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -310,11 +389,16 @@ serve(async (req) => {
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err || "Unknown error");
-    await supabase.from("sync_runs").insert({
-      source: "ymq",
-      status: "FAILED",
-      error_message: message,
-    });
+    try {
+      const supabase = getSupabaseAdmin() as SupabaseAdmin;
+      await supabase.from("sync_runs").insert({
+        source: "ymq",
+        status: "FAILED",
+        error_message: message,
+      });
+    } catch {
+      void 0;
+    }
     return new Response(
       JSON.stringify({ success: false, error: message }),
       { 

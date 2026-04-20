@@ -11,11 +11,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
+    "preview": "node scripts/preview-matchlife.mjs",
     "check": "tsc -b --noEmit",
     "sync:ymq": "node scripts/sync-ymq-full.mjs",
     "sync:ymq:watch": "node scripts/watch-ymq.mjs",
-    "reset:db": "node scripts/reset-db.mjs"
+    "reset:db": "node scripts/reset-db.mjs",
+    "diag:supabase": "node scripts/check-supabase-connectivity.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.0",

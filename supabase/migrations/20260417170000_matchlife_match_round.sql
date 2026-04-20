@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS public.matches
+ADD COLUMN IF NOT EXISTS round_name TEXT;
