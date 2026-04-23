@@ -215,9 +215,9 @@ export function PlayerCareer() {
               <div className="text-2xl font-black text-brand-600">{stats.wins}</div>
               <div className="text-xs text-text-sub font-medium">胜场数</div>
             </div>
-            <div className="bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 rounded-xl border border-brand-100 text-center text-white shadow-md">
-              <div className="text-2xl font-black">{stats.winRate.toFixed(1)}%</div>
-              <div className="text-xs font-medium opacity-90">总胜率</div>
+            <div className="bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 rounded-xl border border-brand-100 text-center shadow-md">
+              <div className="text-2xl font-black text-white">{stats.winRate.toFixed(1)}%</div>
+              <div className="text-xs font-medium text-white/90">总胜率</div>
             </div>
           </div>
         </div>
