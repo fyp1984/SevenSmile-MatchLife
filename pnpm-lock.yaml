@@ -20,6 +20,9 @@ importers:
       lucide-react:
         specifier: ^0.511.0
         version: 0.511.0(react@18.3.1)
+      qrcode.react:
+        specifier: ^4.2.0
+        version: 4.2.0(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -32,6 +35,9 @@ importers:
       tailwind-merge:
         specifier: ^3.0.2
         version: 3.5.0
+      weixin-js-sdk:
+        specifier: ^1.6.5
+        version: 1.6.5
       zustand:
         specifier: ^5.0.3
         version: 5.0.12(@types/react@18.3.28)(react@18.3.1)
@@ -1622,6 +1628,11 @@ packages:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
 
+  qrcode.react@4.2.0:
+    resolution: {integrity: sha512-QpgqWi8rD9DsS9EP3z7BT+5lY5SFhsqGjpgW5DY/i3mK4M9DTBNz3ErMi8BWYEfI3L0d8GIbGmcdFAS1uIRGjA==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
 
@@ -1973,6 +1984,9 @@ packages:
   webidl-conversions@8.0.1:
     resolution: {integrity: sha512-BMhLD/Sw+GbJC21C/UgyaZX41nPt8bUTg+jWyDeg7e7YN4xOM05YPSIXceACnXVtqyEw/LMClUQMtMZ+PGGpqQ==}
     engines: {node: '>=20'}
+
+  weixin-js-sdk@1.6.5:
+    resolution: {integrity: sha512-Gph1WAWB2YN/lMOFB/ymb+hbU/wYazzJgu6PMMktCy9cSCeW5wA6Zwt0dpahJbJ+RJEwtTv2x9iIu0U4enuVSQ==}
 
   whatwg-mimetype@3.0.0:
     resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
@@ -3453,6 +3467,10 @@ snapshots:
 
   punycode@2.3.1: {}
 
+  qrcode.react@4.2.0(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+
   queue-microtask@1.2.3: {}
 
   react-dom@18.3.1(react@18.3.1):
@@ -3781,6 +3799,8 @@ snapshots:
       xml-name-validator: 5.0.0
 
   webidl-conversions@8.0.1: {}
+
+  weixin-js-sdk@1.6.5: {}
 
   whatwg-mimetype@3.0.0: {}
 
