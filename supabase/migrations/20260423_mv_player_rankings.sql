@@ -68,9 +68,9 @@ CREATE INDEX idx_mv_player_rankings_last_active
 --   page_limit: Number of records per page (default 20)
 --   page_offset: Offset for pagination (default 0)
 CREATE OR REPLACE FUNCTION get_player_rankings(
-  sport_type TEXT DEFAULT NULL,
   page_limit INT DEFAULT 20,
-  page_offset INT DEFAULT 0
+  page_offset INT DEFAULT 0,
+  sport_type TEXT DEFAULT NULL
 )
 RETURNS TABLE (
   rank BIGINT,

@@ -32,9 +32,9 @@ export default function Leaderboard() {
 
     try {
       const { data, error: rpcError } = await supabase.rpc('get_player_rankings', {
-        sport_type: activeSport,
         page_limit: PAGE_SIZE,
         page_offset: offset,
+        sport_type: activeSport,
       });
 
       if (rpcError) throw new Error(rpcError.message);

@@ -168,16 +168,19 @@ export function PlayerCareer() {
     );
   }
 
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const fullUrl = `${window.location.origin}${baseUrl}player/${encodeURIComponent(name || '')}`.replace(/([^:]\/)\/+/g, '$1');
+  
   const shareData: PlayerShareData = {
     type: 'player',
-    playerName: name || '选手',
+    playerName: name || '',
     totalMatches: stats.totalMatches,
     wins: stats.wins,
     winRate: stats.winRate,
-    qrCodeUrl: `${window.location.origin}/player/${encodeURIComponent(name || '')}`,
+    qrCodeUrl: fullUrl,
   };
 
-  const shareUrl = `${window.location.origin}/player/${encodeURIComponent(name || '')}`;
+  const shareUrl = fullUrl;
   const shareTitle = `${name} 的生涯数据 - 七笑果 MatchLife`;
   const shareDesc = `总场次：${stats.totalMatches} | 胜场：${stats.wins} | 胜率：${stats.winRate.toFixed(1)}%`;
 
@@ -199,7 +202,7 @@ export function PlayerCareer() {
 
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8 flex flex-col md:flex-row items-center gap-8">
         <div className="w-32 h-32 bg-gradient-to-br from-brand-100 to-brand-300 rounded-full flex items-center justify-center text-4xl font-extrabold text-brand-800 shadow-inner">
-          {name?.substring(0, 2) || "选手"}
+          {name?.substring(0, 1) || "选"}
         </div>
         <div className="flex-1 text-center md:text-left space-y-4">
           <h1 className="text-3xl md:text-4xl font-extrabold text-text-main">{name || "选手档案"}</h1>

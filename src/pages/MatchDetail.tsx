@@ -148,19 +148,22 @@ export function MatchDetail() {
 
   const { setsA, setsB } = parseScore(match.score_text);
 
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const fullUrl = `${window.location.origin}${baseUrl}matches/${match.id}`.replace(/([^:]\/)\/+/g, '$1');
+  
   const shareData: MatchShareData = {
     type: 'match',
     tournamentName: match.tournament_name,
     playerA: playerANames,
     playerB: playerBNames,
-    score: match.score_text || '-',
-    date: formatDate(match.start_time),
-    eventKey: match.event_key || undefined,
-    winnerSide: match.winner_side as 'A' | 'B' | 'UNKNOWN',
-    qrCodeUrl: `${window.location.origin}/matches/${match.id}`,
+    score: match.score_text || '进行中',
+    date: new Date((match as any).match_date || (match as any).created_at || Date.now()).toLocaleDateString('zh-CN'),
+    eventKey: match.event_key,
+    winnerSide: (match.winner_side || 'UNKNOWN') as 'A' | 'B' | 'UNKNOWN',
+    qrCodeUrl: fullUrl,
   };
 
-  const shareUrl = `${window.location.origin}/matches/${match.id}`;
+  const shareUrl = fullUrl;
   const shareTitle = `${match.tournament_name} - ${playerANames} vs ${playerBNames}`;
   const shareDesc = `比分：${match.score_text || '进行中'} | 七笑果 MatchLife`;
 
@@ -212,9 +215,9 @@ export function MatchDetail() {
         <div className="flex flex-col md:flex-row items-center justify-center gap-8 md:gap-16 my-12">
           <div className="flex flex-col items-center">
             <div className={`w-24 h-24 ${isPlayerAWinner ? 'bg-gradient-to-br from-brand-100 to-brand-200' : 'bg-gray-100'} rounded-full flex items-center justify-center text-2xl font-bold ${isPlayerAWinner ? 'text-brand-800' : 'text-gray-600'} shadow-inner mb-4 relative`}>
-              {playerANames.split("/")[0].slice(0, 2)}
+              {playerANames.split("/")[0].slice(0, 1)}
               {isPlayerAWinner && (
-                <div className="absolute -top-2 -right-2 bg-accent-yellow text-white p-1.5 rounded-full shadow-sm">
+                <div className="absolute -top-2 -right-2 bg-accent-yellow text-gray-900 p-1.5 rounded-full shadow-sm">
                   <Trophy className="w-4 h-4" />
                 </div>
               )}
@@ -235,9 +238,9 @@ export function MatchDetail() {
 
           <div className="flex flex-col items-center">
             <div className={`w-24 h-24 ${isPlayerBWinner ? 'bg-gradient-to-br from-brand-100 to-brand-200' : 'bg-gray-100'} rounded-full flex items-center justify-center text-2xl font-bold ${isPlayerBWinner ? 'text-brand-800' : 'text-gray-600'} shadow-inner mb-4 relative`}>
-              {playerBNames.split("/")[0].slice(0, 2)}
+              {playerBNames.split("/")[0].slice(0, 1)}
               {isPlayerBWinner && (
-                <div className="absolute -top-2 -right-2 bg-accent-yellow text-white p-1.5 rounded-full shadow-sm">
+                <div className="absolute -top-2 -right-2 bg-accent-yellow text-gray-900 p-1.5 rounded-full shadow-sm">
                   <Trophy className="w-4 h-4" />
                 </div>
               )}

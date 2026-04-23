@@ -349,6 +349,9 @@ export default function Stats() {
     document.body.removeChild(link);
   };
 
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const fullUrl = `${window.location.origin}${baseUrl}stats?sport=badminton`.replace(/([^:]\/)\/+/g, '$1');
+  
   const shareData: StatsShareData | null = stats ? {
     type: 'stats',
     tournamentName: stats.selectedTournament,
@@ -358,10 +361,10 @@ export default function Stats() {
       winRate: r.winRate * 100,
     })),
     totalMatches: stats.totalMatches,
-    qrCodeUrl: `${window.location.origin}/stats?sport=badminton`,
+    qrCodeUrl: fullUrl,
   } : null;
 
-  const shareUrl = `${window.location.origin}/stats?sport=badminton`;
+  const shareUrl = fullUrl;
   const shareTitle = stats ? `${stats.selectedTournament} 排行榜 - 七笑果 MatchLife` : '赛事排行榜';
   const shareDesc = stats ? `总场次：${stats.totalMatches} | 参赛人数：${stats.totalPlayers}` : '查看最新赛事排行榜';
 
