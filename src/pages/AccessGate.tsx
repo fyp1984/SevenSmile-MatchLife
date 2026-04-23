@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-const PASSCODE = '7%K$QJ2pWtgw';
+const PASSCODE = import.meta.env.VITE_ACCESS_PASSCODE || '7%K$QJ2pWtgw';
 const SESSION_KEY = 'matchlife_gate_ok';
 
 export function shouldBypassGate() {

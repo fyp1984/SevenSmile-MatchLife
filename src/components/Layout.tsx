@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet, Link } from 'react-router-dom';
 import logoImg from '../assets/logo.svg';
 import { useVisitTracker } from '../hooks/useVisitTracker';
+import SportTabBar from './SportTabBar';
 
 export default function Layout() {
   useVisitTracker();
@@ -43,6 +44,8 @@ export default function Layout() {
           </nav>
         </div>
       </header>
+
+      <SportTabBar />
 
       <main className="relative z-10 max-w-7xl mx-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         <Outlet />
