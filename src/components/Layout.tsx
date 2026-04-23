@@ -1,4 +1,3 @@
-import React from 'react';
 import { Outlet, Link } from 'react-router-dom';
 import logoImg from '../assets/logo.svg';
 import { useVisitTracker } from '../hooks/useVisitTracker';
@@ -31,6 +30,9 @@ export default function Layout() {
             </Link>
             <Link to="/stats" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
               赛事看板
+            </Link>
+            <Link to="/leaderboard" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
+              排行榜
             </Link>
             <Link to="/sources" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
               数据源
