@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 
@@ -49,6 +50,16 @@ export default function Home() {
   const refreshTimerRef = useRef<number | null>(null);
   const lastMatchesSignatureRef = useRef('');
   const searchCacheRef = useRef<Map<string, MatchRow[]>>(new Map());
+  
+  const [filterExpanded, setFilterExpanded] = useState(false);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [tournamentFilter, setTournamentFilter] = useState('');
+  
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const debounceTimerRef = useRef<number | null>(null);
 
   const matchTs = (m: MatchRow) => {
     const t1 = m.start_time ? Date.parse(m.start_time) : NaN;
@@ -226,7 +237,7 @@ export default function Home() {
     const { data, error } = await Promise.race([
       request,
       new Promise<{ data: null; error: Error }>((resolve) => {
-        window.setTimeout(() => resolve({ data: null, error: new Error('查询超时，请稍后重试。') }), 10_000);
+        window.setTimeout(() => resolve({ data: null, error: new Error('查询超时，请稍后重试。') }), 30_000);
       }),
     ]);
 
@@ -277,7 +288,7 @@ export default function Home() {
     }
     try {
       const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
-      const primaryRequest = supabase
+      let primaryRequest = supabase
         .from('matches')
         .select(MATCH_SELECT)
         .or(
@@ -286,9 +297,23 @@ export default function Home() {
             `players_text.ilike.%${escaped}%`,
             `event_key.ilike.%${escaped}%`,
           ].join(',')
-        )
-        .order('source_updated_at', { ascending: false, nullsFirst: false })
-        .limit(20);
+        );
+      
+      if (dateFrom) {
+        primaryRequest = primaryRequest.gte('start_time', dateFrom);
+      }
+      if (dateTo) {
+        primaryRequest = primaryRequest.lte('start_time', dateTo);
+      }
+      if (categoryFilter) {
+        primaryRequest = primaryRequest.ilike('category', `%${categoryFilter}%`);
+      }
+      if (tournamentFilter) {
+        primaryRequest = primaryRequest.ilike('tournament_name', `%${tournamentFilter}%`);
+      }
+      
+      primaryRequest = primaryRequest.order('source_updated_at', { ascending: false, nullsFirst: false }).limit(20);
+      
       const primary = await Promise.race([
         primaryRequest,
         new Promise<{ data: null; error: Error }>((resolve) => {
@@ -306,7 +331,7 @@ export default function Home() {
           return;
         }
 
-        const secondaryRequest = supabase
+        let secondaryRequest = supabase
           .from('matches')
           .select(MATCH_SELECT)
           .or(
@@ -317,9 +342,23 @@ export default function Home() {
               `city.ilike.%${escaped}%`,
               `location.ilike.%${escaped}%`,
             ].join(',')
-          )
-          .order('source_updated_at', { ascending: false, nullsFirst: false })
-          .limit(20);
+          );
+        
+        if (dateFrom) {
+          secondaryRequest = secondaryRequest.gte('start_time', dateFrom);
+        }
+        if (dateTo) {
+          secondaryRequest = secondaryRequest.lte('start_time', dateTo);
+        }
+        if (categoryFilter) {
+          secondaryRequest = secondaryRequest.ilike('category', `%${categoryFilter}%`);
+        }
+        if (tournamentFilter) {
+          secondaryRequest = secondaryRequest.ilike('tournament_name', `%${tournamentFilter}%`);
+        }
+        
+        secondaryRequest = secondaryRequest.order('source_updated_at', { ascending: false, nullsFirst: false }).limit(20);
+        
         const secondary = await Promise.race([
           secondaryRequest,
           new Promise<{ data: null; error: Error }>((resolve) => {
@@ -353,6 +392,70 @@ export default function Home() {
         setLoading(false);
       }
     }
+  };
+
+  const clearFilters = () => {
+    setDateFrom('');
+    setDateTo('');
+    setCategoryFilter('');
+    setTournamentFilter('');
+  };
+
+  const hasActiveFilters = Boolean(dateFrom || dateTo || categoryFilter || tournamentFilter);
+
+  const fetchSuggestions = async (q: string) => {
+    if (!q.trim() || q.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const escaped = q.trim().replace(/[%_,]/g, (m) => `\\${m}`);
+    const { data } = await supabase
+      .from('matches')
+      .select('players_text, tournament_name')
+      .or(`players_text.ilike.%${escaped}%,tournament_name.ilike.%${escaped}%`)
+      .limit(10);
+    
+    if (!data) return;
+    const seen = new Set<string>();
+    const results: string[] = [];
+    for (const row of data) {
+      if (row.tournament_name && row.tournament_name.toLowerCase().includes(q.toLowerCase())) {
+        if (!seen.has(row.tournament_name)) {
+          seen.add(row.tournament_name);
+          results.push(row.tournament_name);
+        }
+      }
+      if (row.players_text) {
+        const parts = row.players_text.split(/\s+vs\s+/i);
+        for (const part of parts) {
+          const trimmed = part.trim();
+          if (trimmed && trimmed.toLowerCase().includes(q.toLowerCase()) && !seen.has(trimmed)) {
+            seen.add(trimmed);
+            results.push(trimmed);
+          }
+        }
+      }
+      if (results.length >= 8) break;
+    }
+    setSuggestions(results.slice(0, 8));
+    setShowSuggestions(results.length > 0);
+  };
+
+  const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setSearchQuery(val);
+    if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = window.setTimeout(() => {
+      void fetchSuggestions(val);
+    }, 300);
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    setSearchQuery(suggestion);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    handleSearch(undefined, suggestion);
   };
 
   return (
@@ -395,7 +498,9 @@ export default function Home() {
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={handleSearchInputChange}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
               placeholder="搜索赛事名称、运动员名称、赛事日期..."
               className="w-full border-none bg-transparent px-4 py-3 text-base font-medium text-brand-brown outline-none placeholder-orange-300 focus:ring-0 sm:text-lg"
             />
@@ -446,7 +551,122 @@ export default function Home() {
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : '检索'}
             </button>
           </div>
+          
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-lg border border-orange-100 overflow-hidden z-50">
+              {suggestions.map((suggestion, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleSuggestionClick(suggestion)}
+                  className="w-full px-6 py-3 text-left hover:bg-orange-50 transition-colors border-b border-orange-50 last:border-b-0 text-brand-brown font-medium"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
         </form>
+
+        <div className="w-full max-w-3xl mt-6">
+          <button
+            type="button"
+            onClick={() => setFilterExpanded(!filterExpanded)}
+            className="w-full flex items-center justify-between px-6 py-3 bg-white/80 backdrop-blur-sm rounded-2xl border border-orange-100 hover:border-orange-300 transition-all shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <Filter className="w-5 h-5 text-orange-500" />
+              <span className="font-bold text-brand-brown">高级筛选</span>
+              {hasActiveFilters && (
+                <span className="px-2 py-0.5 bg-orange-500 text-white text-xs rounded-full font-bold">
+                  {[dateFrom, dateTo, categoryFilter, tournamentFilter].filter(Boolean).length}
+                </span>
+              )}
+            </div>
+            {filterExpanded ? (
+              <ChevronUp className="w-5 h-5 text-brand-gray" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-brand-gray" />
+            )}
+          </button>
+
+          {filterExpanded && (
+            <div className="mt-4 p-6 bg-white/80 backdrop-blur-sm rounded-2xl border border-orange-100 shadow-sm space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-brand-brown mb-2">
+                    开始日期
+                  </label>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="w-full px-4 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-brand-brown mb-2">
+                    结束日期
+                  </label>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="w-full px-4 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-brand-brown mb-2">
+                  U组别筛选
+                </label>
+                <input
+                  type="text"
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  placeholder="例如：U12、U14"
+                  className="w-full px-4 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 placeholder-orange-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-brand-brown mb-2">
+                  赛事名称筛选
+                </label>
+                <input
+                  type="text"
+                  value={tournamentFilter}
+                  onChange={(e) => setTournamentFilter(e.target.value)}
+                  placeholder="例如：北方赛区"
+                  className="w-full px-4 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 placeholder-orange-300"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSearch();
+                  }}
+                  className="flex-1 px-6 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-xl font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all"
+                >
+                  应用筛选
+                </button>
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="px-6 py-2 bg-white border border-orange-200 text-orange-600 rounded-xl font-bold hover:bg-orange-50 transition-all flex items-center gap-2"
+                  >
+                    <X className="w-4 h-4" />
+                    清除
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-wrap justify-center gap-3 mt-6">
           <button onClick={() => { const q = ''; setSearchQuery(q); handleSearch(undefined, q); }} className="px-4 py-2 rounded-2xl bg-white/80 text-brand-gray text-sm border border-orange-50 hover:border-orange-300 hover:text-orange-600 cursor-pointer transition-colors shadow-sm backdrop-blur-sm">
@@ -491,9 +711,10 @@ export default function Home() {
             </div>
           ) : matches.length > 0 ? (
             matches.map((match, idx) => (
-              <div
+              <Link
                 key={match.id}
-                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow ${
+                to={`/matches/${match.id}`}
+                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow cursor-pointer ${
                   match.winner_side === 'UNKNOWN'
                     ? 'bg-sky-50/60 border-sky-100'
                     : 'bg-white border-orange-50'
@@ -549,7 +770,7 @@ export default function Home() {
                     {match.winner_side === 'B' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
                   </div>
                 </div>
-              </div>
+              </Link>
             ))
           ) : (
             <div className="text-center py-12 bg-white/50 rounded-3xl border border-orange-50">

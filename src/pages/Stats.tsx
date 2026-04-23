@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, supabaseAnonKey, supabaseUrl } from '../lib/supabase';
-import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users } from 'lucide-react';
+import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download } from 'lucide-react';
 
 type MatchLite = {
   players_a: string[];
@@ -52,6 +52,7 @@ export default function Stats() {
   const [loadingRecent, setLoadingRecent] = useState(true);
   const [selectedForLoad, setSelectedForLoad] = useState('');
   const [loadedTournament, setLoadedTournament] = useState('');
+  const [loadingProgress, setLoadingProgress] = useState<{ loaded: number; total: number } | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const lastRefreshAtRef = useRef<number>(0);
 
@@ -78,54 +79,88 @@ export default function Stats() {
   const fetchStatsSource = async (forcedTournament?: string) => {
     const targetTournament = (forcedTournament || selectedForLoad || selectedTournament || '').trim();
     if (!targetTournament) {
-      setErrorMsg('请先选择赛事后再点击“加载统计”。');
+      setErrorMsg('请先选择赛事后再点击"加载统计"。');
       return;
     }
     setLoading(true);
     setErrorMsg(null);
+    setLoadingProgress(null);
 
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     const base = supabaseUrl.replace(/\/$/, '');
-    const endpoint =
-      `${base}/rest/v1/matches` +
-      `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
-      `&tournament_name=eq.${encodeURIComponent(targetTournament)}`;
+    const BATCH_SIZE = 200;
 
-    let rows: MatchLite[] = [];
     try {
-      const response = await fetch(endpoint, {
+      // 首次加载前200条数据
+      const firstBatchEndpoint =
+        `${base}/rest/v1/matches` +
+        `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
+        `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
+        `&limit=${BATCH_SIZE}` +
+        `&order=start_time.desc.nullslast`;
+
+      const firstResponse = await fetch(firstBatchEndpoint, {
         method: 'GET',
         headers: {
           apikey: supabaseAnonKey,
           Authorization: `Bearer ${supabaseAnonKey}`,
+          Prefer: 'count=exact',
         },
-        signal: controller.signal,
       });
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`加载统计失败（${response.status}）：${detail || '请求未成功'}`);
+
+      if (!firstResponse.ok) {
+        const detail = await firstResponse.text().catch(() => '');
+        throw new Error(`加载统计失败（${firstResponse.status}）：${detail || '请求未成功'}`);
       }
-      const payload = await response.json();
-      rows = (Array.isArray(payload) ? payload : []) as MatchLite[];
+
+      const firstBatch = (await firstResponse.json()) as MatchLite[];
+      const totalCount = parseInt(firstResponse.headers.get('content-range')?.split('/')[1] || '0', 10);
+
+      // 立即渲染首批数据
+      setAllRows(firstBatch);
+      setSelectedTournament(targetTournament);
+      setLoadedTournament(targetTournament);
+      setLoadingProgress({ loaded: firstBatch.length, total: totalCount });
+
+      // 如果还有更多数据，后台继续加载
+      if (totalCount > BATCH_SIZE) {
+        const remainingBatches = Math.ceil((totalCount - BATCH_SIZE) / BATCH_SIZE);
+        const allRows = [...firstBatch];
+
+        for (let i = 0; i < remainingBatches; i++) {
+          const offset = BATCH_SIZE * (i + 1);
+          const batchEndpoint =
+            `${base}/rest/v1/matches` +
+            `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
+            `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
+            `&limit=${BATCH_SIZE}` +
+            `&offset=${offset}` +
+            `&order=start_time.desc.nullslast`;
+
+          const batchResponse = await fetch(batchEndpoint, {
+            method: 'GET',
+            headers: {
+              apikey: supabaseAnonKey,
+              Authorization: `Bearer ${supabaseAnonKey}`,
+            },
+          });
+
+          if (batchResponse.ok) {
+            const batch = (await batchResponse.json()) as MatchLite[];
+            allRows.push(...batch);
+            setAllRows([...allRows]);
+            setLoadingProgress({ loaded: allRows.length, total: totalCount });
+          }
+        }
+      }
+
+      setLoadingProgress(null);
+      setLoading(false);
     } catch (error) {
-      const msg =
-        error instanceof Error && error.name === 'AbortError'
-          ? '加载统计超时，请稍后重试。'
-          : error instanceof Error
-            ? error.message
-            : String(error);
+      const msg = error instanceof Error ? error.message : String(error);
       setErrorMsg(msg);
       setLoading(false);
-      window.clearTimeout(timeout);
-      return;
-    } finally {
-      window.clearTimeout(timeout);
+      setLoadingProgress(null);
     }
-    setAllRows(rows);
-    setSelectedTournament(targetTournament);
-    setLoadedTournament(targetTournament);
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -291,6 +326,37 @@ export default function Stats() {
     return stats.rankingByEvent[activeEventKey] || [];
   }, [stats, activeEventKey]);
 
+  const exportToCSV = () => {
+    if (!stats || activeRanking.length === 0) return;
+    
+    const headers = ['排名', '选手/组合', '胜', '负', '场次', '胜率'];
+    const rows = activeRanking.map((r, idx) => [
+      idx + 1,
+      r.team,
+      r.wins,
+      r.losses,
+      r.played,
+      `${(r.winRate * 100).toFixed(1)}%`
+    ]);
+    
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `matchlife-stats-${today}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (loadingRecent) {
     return <div className="p-20 text-center text-orange-500 font-bold">正在加载赛事列表...</div>;
   }
@@ -304,6 +370,12 @@ export default function Stats() {
       {errorMsg && (
         <div className="w-full mb-6 bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-3xl text-sm font-medium">
           {errorMsg}
+        </div>
+      )}
+      {loadingProgress && (
+        <div className="w-full mb-6 bg-blue-50 border border-blue-200 text-blue-700 px-6 py-4 rounded-3xl text-sm font-medium flex items-center gap-3">
+          <BarChart3 className="w-4 h-4 animate-pulse" />
+          <span>正在加载数据：{loadingProgress.loaded} / {loadingProgress.total} 条记录</span>
         </div>
       )}
 
@@ -455,10 +527,23 @@ export default function Stats() {
           </div>
         )}
         <div className="px-6 py-5 border-b border-orange-100 bg-orange-50/40">
-          <h3 className="text-xl font-bold text-brand-brown flex items-center gap-2">
-            <Medal className="w-5 h-5 text-orange-500" /> 比赛详细排名（按组别/项目切换）
-          </h3>
-          <p className="text-sm text-brand-gray mt-1">当前为“胜场榜”口径（同胜场按胜率、场次排序）。</p>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-xl font-bold text-brand-brown flex items-center gap-2">
+                <Medal className="w-5 h-5 text-orange-500" /> 比赛详细排名（按组别/项目切换）
+              </h3>
+              <p className="text-sm text-brand-gray mt-1">当前为“胜场榜”口径（同胜场按胜率、场次排序）。</p>
+            </div>
+            <button
+              type="button"
+              onClick={exportToCSV}
+              disabled={activeRanking.length === 0}
+              className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-4 py-2 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              导出CSV
+            </button>
+          </div>
         </div>
 
         <div className="px-4 sm:px-6 py-4 border-b border-orange-50 overflow-x-auto">
