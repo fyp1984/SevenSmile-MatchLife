@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, supabaseAnonKey, supabaseUrl } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download } from 'lucide-react';
 
 type MatchLite = {
@@ -86,71 +86,60 @@ export default function Stats() {
     setErrorMsg(null);
     setLoadingProgress(null);
 
-    const base = supabaseUrl.replace(/\/$/, '');
     const BATCH_SIZE = 200;
 
     try {
-      // 首次加载前200条数据
-      const firstBatchEndpoint =
-        `${base}/rest/v1/matches` +
-        `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
-        `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
-        `&limit=${BATCH_SIZE}` +
-        `&order=start_time.desc.nullslast`;
+      const firstRequest = supabase
+        .from('matches')
+        .select('players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at')
+        .eq('tournament_name', targetTournament)
+        .order('start_time', { ascending: false, nullsFirst: false })
+        .range(0, BATCH_SIZE - 1);
 
-      const firstResponse = await fetch(firstBatchEndpoint, {
-        method: 'GET',
-        headers: {
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          Prefer: 'count=exact',
-        },
-      });
+      const firstResponse = await firstRequest;
+      if (firstResponse.error) throw new Error(`加载统计失败：${firstResponse.error.message}`);
 
-      if (!firstResponse.ok) {
-        const detail = await firstResponse.text().catch(() => '');
-        throw new Error(`加载统计失败（${firstResponse.status}）：${detail || '请求未成功'}`);
-      }
+      const firstBatch = firstResponse.data as MatchLite[];
+      const { count: totalCount } = await supabase
+        .from('matches')
+        .select('*', { count: 'exact', head: true })
+        .eq('tournament_name', targetTournament);
+      const total = totalCount ?? 0;
 
-      const firstBatch = (await firstResponse.json()) as MatchLite[];
-      const totalCount = parseInt(firstResponse.headers.get('content-range')?.split('/')[1] || '0', 10);
-
-      // 立即渲染首批数据
       setAllRows(firstBatch);
       setSelectedTournament(targetTournament);
       setLoadedTournament(targetTournament);
-      setLoadingProgress({ loaded: firstBatch.length, total: totalCount });
+      setLoadingProgress({ loaded: firstBatch.length, total });
 
-      // 如果还有更多数据，后台继续加载
-      if (totalCount > BATCH_SIZE) {
-        const remainingBatches = Math.ceil((totalCount - BATCH_SIZE) / BATCH_SIZE);
+      if (total > BATCH_SIZE) {
+        const remainingBatches = Math.ceil((total - BATCH_SIZE) / BATCH_SIZE);
         const allRows = [...firstBatch];
 
+        const batchPromises: Promise<void>[] = [];
         for (let i = 0; i < remainingBatches; i++) {
-          const offset = BATCH_SIZE * (i + 1);
-          const batchEndpoint =
-            `${base}/rest/v1/matches` +
-            `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
-            `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
-            `&limit=${BATCH_SIZE}` +
-            `&offset=${offset}` +
-            `&order=start_time.desc.nullslast`;
+          const from = BATCH_SIZE + i * BATCH_SIZE;
+          const to = BATCH_SIZE + (i + 1) * BATCH_SIZE - 1;
 
-          const batchResponse = await fetch(batchEndpoint, {
-            method: 'GET',
-            headers: {
-              apikey: supabaseAnonKey,
-              Authorization: `Bearer ${supabaseAnonKey}`,
-            },
-          });
+          batchPromises.push(
+            (async () => {
+              const batchRequest = supabase
+                .from('matches')
+                .select('players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at')
+                .eq('tournament_name', targetTournament)
+                .order('start_time', { ascending: false, nullsFirst: false })
+                .range(from, to);
 
-          if (batchResponse.ok) {
-            const batch = (await batchResponse.json()) as MatchLite[];
-            allRows.push(...batch);
-            setAllRows([...allRows]);
-            setLoadingProgress({ loaded: allRows.length, total: totalCount });
-          }
+              const batchResponse = await batchRequest;
+              if (!batchResponse.error && batchResponse.data) {
+                allRows.push(...batchResponse.data);
+              }
+            })()
+          );
         }
+
+        await Promise.all(batchPromises);
+        setAllRows([...allRows]);
+        setLoadingProgress({ loaded: allRows.length, total });
       }
 
       setLoadingProgress(null);
