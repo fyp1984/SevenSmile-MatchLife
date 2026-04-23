@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Calendar, MapPin, Trophy } from "lucide-react";
+import { ArrowLeft, Calendar, MapPin, Trophy, Share2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import ShareModal from "../components/ShareModal";
+import type { MatchShareData } from "../lib/shareCard";
 
 interface Match {
   id: string;
@@ -24,6 +26,7 @@ export function MatchDetail() {
   const [error, setError] = useState<string | null>(null);
   const [relatedMatches, setRelatedMatches] = useState<Match[]>([]);
   const [playerRecentMatches, setPlayerRecentMatches] = useState<Match[]>([]);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   useEffect(() => {
     async function fetchMatch() {
@@ -145,12 +148,37 @@ export function MatchDetail() {
 
   const { setsA, setsB } = parseScore(match.score_text);
 
+  const shareData: MatchShareData = {
+    type: 'match',
+    tournamentName: match.tournament_name,
+    playerA: playerANames,
+    playerB: playerBNames,
+    score: match.score_text || '-',
+    date: formatDate(match.start_time),
+    eventKey: match.event_key || undefined,
+    winnerSide: match.winner_side as 'A' | 'B' | 'UNKNOWN',
+    qrCodeUrl: `${window.location.origin}/matches/${match.id}`,
+  };
+
+  const shareUrl = `${window.location.origin}/matches/${match.id}`;
+  const shareTitle = `${match.tournament_name} - ${playerANames} vs ${playerBNames}`;
+  const shareDesc = `比分：${match.score_text || '进行中'} | 七笑果 MatchLife`;
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <Link to="/" className="inline-flex items-center space-x-2 text-brand-600 hover:text-brand-700 font-medium">
-        <ArrowLeft className="w-4 h-4" />
-        <span>返回搜索</span>
-      </Link>
+      <div className="flex items-center justify-between">
+        <Link to="/" className="inline-flex items-center space-x-2 text-brand-600 hover:text-brand-700 font-medium">
+          <ArrowLeft className="w-4 h-4" />
+          <span>返回搜索</span>
+        </Link>
+        <button
+          onClick={() => setIsShareModalOpen(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-full shadow-md hover:shadow-lg transition-all"
+        >
+          <Share2 className="w-4 h-4" />
+          分享
+        </button>
+      </div>
 
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8">
         <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 border-b border-brand-100 pb-8">
@@ -282,6 +310,15 @@ export function MatchDetail() {
           </div>
         </div>
       )}
+
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        data={shareData}
+        shareUrl={shareUrl}
+        shareTitle={shareTitle}
+        shareDesc={shareDesc}
+      />
     </div>
   );
 }

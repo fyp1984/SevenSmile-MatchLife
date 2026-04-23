@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download } from 'lucide-react';
+import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download, Share2 } from 'lucide-react';
+import ShareModal from '../components/ShareModal';
+import type { StatsShareData } from '../lib/shareCard';
 
 type MatchLite = {
   players_a: string[];
@@ -55,6 +57,7 @@ export default function Stats() {
   const [loadingProgress, setLoadingProgress] = useState<{ loaded: number; total: number } | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const lastRefreshAtRef = useRef<number>(0);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   useEffect(() => {
     fetchRecentTournaments();
@@ -346,6 +349,22 @@ export default function Stats() {
     document.body.removeChild(link);
   };
 
+  const shareData: StatsShareData | null = stats ? {
+    type: 'stats',
+    tournamentName: stats.selectedTournament,
+    topPlayers: activeRanking.slice(0, 3).map(r => ({
+      name: r.team,
+      wins: r.wins,
+      winRate: r.winRate * 100,
+    })),
+    totalMatches: stats.totalMatches,
+    qrCodeUrl: `${window.location.origin}/stats?sport=badminton`,
+  } : null;
+
+  const shareUrl = `${window.location.origin}/stats?sport=badminton`;
+  const shareTitle = stats ? `${stats.selectedTournament} 排行榜 - 七笑果 MatchLife` : '赛事排行榜';
+  const shareDesc = stats ? `总场次：${stats.totalMatches} | 参赛人数：${stats.totalPlayers}` : '查看最新赛事排行榜';
+
   if (loadingRecent) {
     return <div className="p-20 text-center text-orange-500 font-bold">正在加载赛事列表...</div>;
   }
@@ -523,15 +542,26 @@ export default function Stats() {
               </h3>
               <p className="text-sm text-brand-gray mt-1">当前为“胜场榜”口径（同胜场按胜率、场次排序）。</p>
             </div>
-            <button
-              type="button"
-              onClick={exportToCSV}
-              disabled={activeRanking.length === 0}
-              className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-4 py-2 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="w-4 h-4" />
-              导出CSV
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setIsShareModalOpen(true)}
+                disabled={!stats}
+                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-4 py-2 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Share2 className="w-4 h-4" />
+                分享排名
+              </button>
+              <button
+                type="button"
+                onClick={exportToCSV}
+                disabled={activeRanking.length === 0}
+                className="inline-flex items-center gap-2 rounded-full bg-white border-2 border-orange-500 text-orange-600 px-4 py-2 text-sm font-bold shadow-md transition hover:bg-orange-50 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                导出CSV
+              </button>
+            </div>
           </div>
         </div>
 
@@ -585,6 +615,17 @@ export default function Stats() {
           </table>
         </div>
       </div>
+      )}
+
+      {shareData && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          data={shareData}
+          shareUrl={shareUrl}
+          shareTitle={shareTitle}
+          shareDesc={shareDesc}
+        />
       )}
     </div>
   );

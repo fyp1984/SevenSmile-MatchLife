@@ -1,7 +1,9 @@
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Activity, Calendar, Trophy, ChevronRight, TrendingUp, Users } from "lucide-react";
+import { ArrowLeft, Activity, Calendar, Trophy, ChevronRight, TrendingUp, Users, Share2 } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../lib/supabase";
+import ShareModal from "../components/ShareModal";
+import type { PlayerShareData } from "../lib/shareCard";
 
 interface Match {
   id: string;
@@ -27,6 +29,7 @@ export function PlayerCareer() {
   const [stats, setStats] = useState<PlayerStats>({ totalMatches: 0, wins: 0, winRate: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const monthlyWinRates = useMemo(() => {
     if (!name || matches.length === 0) return [];
@@ -121,8 +124,8 @@ export function PlayerCareer() {
 
         const totalMatches = playerMatches.length;
         const wins = playerMatches.filter(match => {
-          const isPlayerA = match.players_a.some(p => p.includes(name || ''));
-          const isPlayerB = match.players_b.some(p => p.includes(name || ''));
+          const isPlayerA = match.players_a.some((p: string) => p.includes(name || ''));
+          const isPlayerB = match.players_b.some((p: string) => p.includes(name || ''));
           if (isPlayerA && match.winner_side === 'A') return true;
           if (isPlayerB && match.winner_side === 'B') return true;
           return false;
@@ -165,12 +168,34 @@ export function PlayerCareer() {
     );
   }
 
+  const shareData: PlayerShareData = {
+    type: 'player',
+    playerName: name || '选手',
+    totalMatches: stats.totalMatches,
+    wins: stats.wins,
+    winRate: stats.winRate,
+    qrCodeUrl: `${window.location.origin}/player/${encodeURIComponent(name || '')}`,
+  };
+
+  const shareUrl = `${window.location.origin}/player/${encodeURIComponent(name || '')}`;
+  const shareTitle = `${name} 的生涯数据 - 七笑果 MatchLife`;
+  const shareDesc = `总场次：${stats.totalMatches} | 胜场：${stats.wins} | 胜率：${stats.winRate.toFixed(1)}%`;
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <Link to="/" className="inline-flex items-center space-x-2 text-brand-600 hover:text-brand-700 font-medium">
-        <ArrowLeft className="w-4 h-4" />
-        <span>返回搜索</span>
-      </Link>
+      <div className="flex items-center justify-between">
+        <Link to="/" className="inline-flex items-center space-x-2 text-brand-600 hover:text-brand-700 font-medium">
+          <ArrowLeft className="w-4 h-4" />
+          <span>返回搜索</span>
+        </Link>
+        <button
+          onClick={() => setIsShareModalOpen(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-full shadow-md hover:shadow-lg transition-all"
+        >
+          <Share2 className="w-4 h-4" />
+          分享成就
+        </button>
+      </div>
 
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8 flex flex-col md:flex-row items-center gap-8">
         <div className="w-32 h-32 bg-gradient-to-br from-brand-100 to-brand-300 rounded-full flex items-center justify-center text-4xl font-extrabold text-brand-800 shadow-inner">
@@ -340,6 +365,15 @@ export function PlayerCareer() {
           )}
         </div>
       </div>
+
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        data={shareData}
+        shareUrl={shareUrl}
+        shareTitle={shareTitle}
+        shareDesc={shareDesc}
+      />
     </div>
   );
 }
