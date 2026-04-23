@@ -36,6 +36,32 @@ type SyncRunRow = {
 const MATCH_SELECT =
   'id, category, tournament_name, start_time, source_updated_at, match_started_at, match_ended_at, match_time_name, city, location, players_a, players_b, score_text, winner_side, event_key, round_name';
 
+const MAX_CACHE_SIZE = 100;
+
+function createLRUCache<K, V>(maxSize: number) {
+  const cache = new Map<K, V>();
+  return {
+    get(key: K): V | undefined {
+      const value = cache.get(key);
+      if (value !== undefined) {
+        cache.delete(key);
+        cache.set(key, value);
+      }
+      return value;
+    },
+    set(key: K, value: V) {
+      if (cache.has(key)) {
+        cache.delete(key);
+      } else if (cache.size >= maxSize) {
+        const firstKey = cache.keys().next().value;
+        if (firstKey !== undefined) cache.delete(firstKey);
+      }
+      cache.set(key, value);
+    },
+    size: cache.size,
+  };
+}
+
 export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [matches, setMatches] = useState<MatchRow[]>([]);
@@ -49,8 +75,8 @@ export default function Home() {
   const inFlightRef = useRef(false);
   const refreshTimerRef = useRef<number | null>(null);
   const lastMatchesSignatureRef = useRef('');
-  const searchCacheRef = useRef<Map<string, MatchRow[]>>(new Map());
-  
+  const searchCacheRef = useRef(createLRUCache<string, MatchRow[]>(MAX_CACHE_SIZE));
+
   const [filterExpanded, setFilterExpanded] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
