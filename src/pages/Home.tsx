@@ -715,8 +715,8 @@ export default function Home() {
                 key={match.id}
                 to={`/matches/${match.id}`}
                 className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow cursor-pointer ${
-                  match.winner_side === 'UNKNOWN'
-                    ? 'bg-sky-50/60 border-sky-100'
+                  idx === 0 && match.winner_side === 'UNKNOWN'
+                    ? 'bg-orange-50/70 border-orange-100'
                     : 'bg-white border-orange-50'
                 }`}
               >
