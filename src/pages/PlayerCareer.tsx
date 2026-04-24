@@ -300,9 +300,9 @@ export function PlayerCareer() {
                     <div className="flex-1 h-6 bg-brand-50 rounded-full overflow-hidden flex">
                       <div
                         className="bg-white flex items-center justify-center text-xs font-bold"
-                        style={{ width: `${(stat.wins / stat.matches) * 100}%`, color: 'rgb(241, 77, 59)' }}
+                        style={{ width: `${(stat.wins / stat.matches) * 100}%` }}
                       >
-                        {stat.wins > 0 && <span className="px-2">{stat.wins}胜</span>}
+                        {stat.wins > 0 && <span className="px-2" style={{ color: 'rgb(241, 77, 59)' }}>{stat.wins}胜</span>}
                       </div>
                       <div
                         className="bg-gray-300 flex items-center justify-center text-gray-700 text-xs font-bold"
