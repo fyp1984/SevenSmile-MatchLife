@@ -215,9 +215,9 @@ export function PlayerCareer() {
               <div className="text-2xl font-black text-brand-600">{stats.wins}</div>
               <div className="text-xs text-text-sub font-medium">胜场数</div>
             </div>
-            <div className="bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 rounded-xl border border-brand-100 text-center shadow-md">
+            <div className="bg-gradient-to-br from-orange-500 to-red-500 px-4 py-2 rounded-xl border border-orange-200 text-center shadow-md">
               <div className="text-2xl font-black text-white">{stats.winRate.toFixed(1)}%</div>
-              <div className="text-xs font-medium text-white/90">总胜率</div>
+              <div className="text-xs font-medium text-white">总胜率</div>
             </div>
           </div>
         </div>
@@ -299,7 +299,7 @@ export function PlayerCareer() {
                   <div className="flex items-center gap-2">
                     <div className="flex-1 h-6 bg-brand-50 rounded-full overflow-hidden flex">
                       <div
-                        className="bg-gradient-to-r from-brand-500 to-brand-600 flex items-center justify-center text-white text-xs font-bold"
+                        className="bg-gradient-to-r from-orange-500 to-red-500 flex items-center justify-center text-white text-xs font-bold"
                         style={{ width: `${(stat.wins / stat.matches) * 100}%` }}
                       >
                         {stat.wins > 0 && <span className="px-2">{stat.wins}胜</span>}
