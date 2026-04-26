@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { createSupabaseServiceClient, resetDb, syncOnce } from './lib/ymq-sync.mjs';
+import { syncTennisOnce } from './lib/tennis-sync.mjs';
 
 function parseEnvFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -36,6 +37,16 @@ function parseRaceIdFromUrl(value) {
   }
 }
 
+function isMissingResetRpc(error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null
+        ? String(error.message || error.details || JSON.stringify(error))
+        : String(error);
+  return /PGRST202|Could not find the function|does not exist|schema cache/i.test(message);
+}
+
 async function main() {
   const env = parseEnvFile('.env.local');
   const supabaseUrl = env.VITE_SUPABASE_URL;
@@ -48,7 +59,7 @@ async function main() {
   const supabase = createSupabaseServiceClient({ url: supabaseUrl, serviceRoleKey });
   const restBase = supabaseUrl.replace(/\/+$/, '');
   const sourceRes = await fetch(
-    `${restBase}/rest/v1/matchlife_data_sources?select=id,name,url,enabled,updated_at&enabled=eq.true&order=updated_at.desc&limit=20`,
+    `${restBase}/rest/v1/matchlife_data_sources?select=id,name,url,format,enabled,updated_at&enabled=eq.true&order=updated_at.desc&limit=20`,
     {
       headers: {
         apikey: anonKey,
@@ -64,29 +75,29 @@ async function main() {
   const targets = [];
   const seen = new Set();
   for (const row of data || []) {
+    if (row.format === 'tennis-json') {
+      targets.push({
+        isTennis: true,
+        url: row.url,
+        name: String(row.name || `tennis-source-${row.id}`),
+      });
+      continue;
+    }
+
     const raceId = parseRaceIdFromUrl(row.url);
     if (!raceId || seen.has(raceId)) continue;
     seen.add(raceId);
     targets.push({
+      isTennis: false,
       raceId,
       name: String(row.name || `source-${raceId}`),
     });
-    if (targets.length === 2) break;
-  }
-  if (targets.length < 2) {
-    throw new Error('当前启用数据源少于2个，无法按要求执行双源全量同步');
   }
 
   try {
     await resetDb({ supabase });
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : typeof error === 'object' && error !== null
-          ? String(error.message || error.details || JSON.stringify(error))
-          : String(error);
-    if (!/matchlife_reset_db|PGRST202/i.test(message)) {
+    if (!isMissingResetRpc(error)) {
       throw error;
     }
   }
@@ -94,13 +105,24 @@ async function main() {
   const results = [];
   for (const target of targets) {
     try {
-      const one = await syncOnce({
-        supabase,
-        raceId: target.raceId,
-        tournamentName: target.name,
-        mode: 'full',
-        runKind: `manual_full_race_${target.raceId}`,
-      });
+      let one;
+      if (target.isTennis) {
+        one = await syncTennisOnce({
+          supabase,
+          sourceUrl: target.url,
+          tournamentName: target.name,
+          mode: 'full',
+          runKind: `manual_full_tennis_${Date.now()}`,
+        });
+      } else {
+        one = await syncOnce({
+          supabase,
+          raceId: target.raceId,
+          tournamentName: target.name,
+          mode: 'full',
+          runKind: `manual_full_race_${target.raceId}`,
+        });
+      }
       results.push({ ...target, ok: true, ...one });
     } catch (error) {
       results.push({

@@ -101,6 +101,10 @@ function getHost() {
   return window.location.host || 'unknown';
 }
 
+function isVisitStatsBootstrapError(message: string) {
+  return /PGRST002|PGRST202|schema cache|record_page_visit|get_page_visit_stats/i.test(message);
+}
+
 export async function recordPageVisit(supabase: SupabaseClient) {
   const signature = await buildNetworkSignature();
   const deviceType = detectDeviceType();
@@ -129,7 +133,7 @@ export function normalizeVisitStatsError(error: unknown) {
             JSON.stringify(error),
           )
         : String(error || '');
-  if (/PGRST002|PGRST202|schema cache|record_page_visit|get_page_visit_stats/i.test(message)) {
+  if (isVisitStatsBootstrapError(message)) {
     return '访问统计服务待初始化，请先应用 Supabase migration。';
   }
   if (/\[object Object\]/.test(message)) {
@@ -147,7 +151,23 @@ export async function fetchVisitStats(supabase: SupabaseClient): Promise<VisitSt
     p_app_scope: getScope(),
   });
 
-  if (error) throw new Error(normalizeVisitStatsError(error));
+  if (error) {
+    const rawMessage =
+      error instanceof Error
+        ? error.message
+        : error && typeof error === 'object'
+          ? JSON.stringify(error)
+          : String(error || '');
+    if (isVisitStatsBootstrapError(rawMessage)) {
+      return {
+        today: 0,
+        week: 0,
+        month: 0,
+        all: 0,
+      };
+    }
+    throw new Error(normalizeVisitStatsError(error));
+  }
 
   const row = Array.isArray(data) ? data[0] : data;
   return {

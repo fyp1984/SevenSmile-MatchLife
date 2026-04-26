@@ -11,15 +11,13 @@ export type TechniqueTag = {
 export type MatchEvent = {
   id: string;
   match_id: string;
-  user_id: string;
   tag_id: string;
-  event_time: string;
+  event_time: number;
   video_timestamp: number | null;
   notes: string | null;
   is_verified: boolean;
   created_by: string;
   created_at: string;
-  updated_at: string;
 };
 
 export type UserReputation = {

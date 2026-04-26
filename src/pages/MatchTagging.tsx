@@ -7,6 +7,7 @@ import {
 import { useTagStore } from '../stores/tagStore';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
+import { getLocalContributorId } from '../lib/localContributor';
 
 type Match = {
   id: string;
@@ -34,11 +35,14 @@ export default function MatchTagging() {
     loadUserReputation,
     loadMatchTags,
     addTag,
+    updateTag,
     deleteTag,
+    clearTags,
   } = useTagStore();
 
   const [match, setMatch] = useState<Match | null>(null);
-  const [selectedTagId, setSelectedTagId] = useState('');
+  const [initializing, setInitializing] = useState(true);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
   const [videoTimestamp, setVideoTimestamp] = useState<number | null>(null);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
@@ -46,19 +50,32 @@ export default function MatchTagging() {
 
   useEffect(() => {
     if (!matchId) return;
-    
+
+    let cancelled = false;
+    clearTags();
+    setInitializing(true);
+
     const init = async () => {
       setCurrentMatch(matchId);
-      await Promise.all([
+      await Promise.allSettled([
         loadMatchDetails(),
         loadAvailableTags('badminton'),
         loadMatchTags(matchId),
         loadUserReputationData(),
       ]);
+      if (!cancelled) {
+        setInitializing(false);
+      }
     };
 
     void init();
-  }, [matchId]);
+
+    return () => {
+      cancelled = true;
+      clearTags();
+      setInitializing(true);
+    };
+  }, [matchId, clearTags, loadAvailableTags, loadMatchTags, loadUserReputation, setCurrentMatch]);
 
   const loadMatchDetails = async () => {
     if (!matchId) return;
@@ -78,23 +95,38 @@ export default function MatchTagging() {
   };
 
   const loadUserReputationData = async () => {
-    const { data: userData } = await supabase.auth.getUser();
-    if (userData.user) {
-      await loadUserReputation(userData.user.id);
-    }
+    await loadUserReputation(getLocalContributorId());
   };
 
   const handleAddTag = async () => {
-    if (!selectedTagId) return;
+    if (selectedTagIds.length === 0) return;
 
-    await addTag({
-      tagId: selectedTagId,
-      eventTime: new Date().toISOString(),
-      videoTimestamp,
+    for (const tagId of selectedTagIds) {
+      await addTag({
+        tagId,
+        eventTime: new Date().toISOString(),
+        videoTimestamp,
+        notes,
+      });
+    }
+
+    setSelectedTagIds([]);
+    setNotes('');
+    setVideoTimestamp(null);
+  };
+
+  const toggleTagSelection = (tagId: string) => {
+    setSelectedTagIds((prev) => 
+      prev.includes(tagId) ? prev.filter(id => id !== tagId) : [...prev, tagId]
+    );
+  };
+
+  const handleSaveEdit = async (tagId: string) => {
+    await updateTag(tagId, {
       notes,
+      videoTimestamp,
     });
-
-    setSelectedTagId('');
+    setEditingTagId(null);
     setNotes('');
     setVideoTimestamp(null);
   };
@@ -114,10 +146,13 @@ export default function MatchTagging() {
     return acc;
   }, {} as Record<string, typeof availableTags>);
 
-  if (!match) {
+  if (initializing || !match) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+        <div className="text-center space-y-3">
+          <Loader2 className="w-8 h-8 animate-spin text-orange-500 mx-auto" />
+          <div className="text-sm font-medium text-brand-gray">正在加载比赛标签面板...</div>
+        </div>
       </div>
     );
   }
@@ -202,7 +237,7 @@ export default function MatchTagging() {
             </div>
           </div>
           <div className="text-sm text-brand-gray">
-            继续打标签获取更多积分和徽章
+            当前环境支持匿名记录员录入，保存后会累计到本地信誉分
           </div>
         </div>
 
@@ -267,28 +302,41 @@ export default function MatchTagging() {
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-brand-brown mb-2">
-                选择标签
-              </label>
-              <div className="max-h-64 overflow-y-auto space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-bold text-brand-brown">
+                  选择标签 <span className="text-xs text-brand-gray font-normal ml-1">支持组合多选</span>
+                </label>
+                {selectedTagIds.length > 0 && (
+                  <button 
+                    onClick={() => setSelectedTagIds([])}
+                    className="text-xs font-bold text-orange-600 hover:text-orange-700"
+                  >
+                    清空已选 ({selectedTagIds.length})
+                  </button>
+                )}
+              </div>
+              <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                 {Object.entries(groupedTags).map(([category, categoryTags]) => (
                   <div key={category} className="space-y-1">
                     <div className="text-xs font-bold text-orange-600 px-2 py-1 bg-orange-50 rounded-lg">
                       {category}
                     </div>
-                    {categoryTags.map((tag) => (
-                      <button
-                        key={tag.id}
-                        onClick={() => setSelectedTagId(tag.id)}
-                        className={`w-full text-left px-4 py-2 rounded-xl transition-all ${
-                          selectedTagId === tag.id
-                            ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold'
-                            : 'bg-white border border-orange-100 text-brand-brown hover:bg-orange-50'
-                        }`}
-                      >
-                        {tag.tag_name}
-                      </button>
-                    ))}
+                    <div className="grid grid-cols-2 gap-2">
+                      {categoryTags.map((tag) => (
+                        <button
+                          key={tag.id}
+                          onClick={() => toggleTagSelection(tag.id)}
+                          className={`w-full text-left px-3 py-2 rounded-xl transition-all text-sm truncate ${
+                            selectedTagIds.includes(tag.id)
+                              ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold shadow-md'
+                              : 'bg-white border border-orange-100 text-brand-brown hover:bg-orange-50'
+                          }`}
+                          title={tag.tag_name}
+                        >
+                          {tag.tag_name}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -325,7 +373,7 @@ export default function MatchTagging() {
 
             <button
               onClick={handleAddTag}
-              disabled={!selectedTagId || loading}
+              disabled={selectedTagIds.length === 0 || loading}
               className="w-full px-6 py-3 rounded-2xl bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading ? (
@@ -333,7 +381,7 @@ export default function MatchTagging() {
               ) : (
                 <>
                   <Save className="w-5 h-5" />
-                  保存标签
+                  保存 {selectedTagIds.length > 1 ? `${selectedTagIds.length} 个` : ''}标签
                 </>
               )}
             </button>
@@ -367,7 +415,11 @@ export default function MatchTagging() {
                         <CheckCircle className="w-5 h-5 text-green-500" />
                       )}
                       <button
-                        onClick={() => setEditingTagId(tag.id)}
+                        onClick={() => {
+                          setEditingTagId(tag.id);
+                          setNotes(tag.notes);
+                          setVideoTimestamp(tag.videoTimestamp);
+                        }}
                         className="p-2 rounded-lg hover:bg-orange-50 text-orange-600"
                       >
                         <Edit2 className="w-4 h-4" />
@@ -394,6 +446,42 @@ export default function MatchTagging() {
                     {tag.notes && (
                       <div className="mt-2 text-xs bg-orange-50 px-3 py-2 rounded-lg">
                         {tag.notes}
+                      </div>
+                    )}
+                    {editingTagId === tag.id && (
+                      <div className="mt-3 rounded-2xl border border-orange-100 bg-orange-50/60 p-3 space-y-3">
+                        <textarea
+                          value={notes}
+                          onChange={(e) => setNotes(e.target.value)}
+                          rows={3}
+                          placeholder="补充该标签备注..."
+                          className="w-full px-3 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 resize-none"
+                        />
+                        <input
+                          type="number"
+                          value={videoTimestamp ?? ''}
+                          onChange={(e) => setVideoTimestamp(e.target.value ? Number(e.target.value) : null)}
+                          placeholder="视频时间戳（秒）"
+                          className="w-full px-3 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => void handleSaveEdit(tag.id)}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white text-sm font-bold"
+                          >
+                            保存修改
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingTagId(null);
+                              setNotes('');
+                              setVideoTimestamp(null);
+                            }}
+                            className="px-4 py-2 rounded-xl border border-orange-200 text-orange-700 text-sm font-bold bg-white"
+                          >
+                            取消
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

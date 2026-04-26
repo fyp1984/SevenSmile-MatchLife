@@ -5,7 +5,7 @@ export type SourceItem = {
   name: string;
   type: 'api' | 'html' | 'file';
   url: string;
-  format: 'ymq-json' | 'matchlife-source-json';
+  format: 'ymq-json' | 'matchlife-source-json' | 'tennis-json';
   enabled: boolean;
   updatedAt: string;
   origin: 'manual' | 'imported';

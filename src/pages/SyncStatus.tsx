@@ -108,7 +108,8 @@ export default function SyncStatus() {
   const [visitStatsError, setVisitStatsError] = useState<string | null>(null);
   const [sources, setSources] = useState<SourceItem[]>([]);
   const [activeSource, setActiveSource] = useState<SourceItem | null>(null);
-  const manualSyncUrl = `${import.meta.env.BASE_URL}api/wechat/manual-sync`;
+  const apiBase = `${import.meta.env.BASE_URL}api`.replace(/\/{2,}/g, '/');
+  const manualSyncUrl = `${apiBase}/wechat/manual-sync`;
 
   const isLocalhost = () => {
     const host = window.location.hostname;
@@ -123,11 +124,11 @@ export default function SyncStatus() {
       setHasServiceRoleKey(null);
       return;
     }
-    fetch('/api/health')
+    fetch(`${apiBase}/health`)
       .then((r) => r.json())
       .then((j) => setHasServiceRoleKey(Boolean(j?.hasServiceRoleKey)))
       .catch(() => setHasServiceRoleKey(null));
-  }, []);
+  }, [apiBase]);
 
   const loadActiveSource = async () => {
     try {
@@ -233,7 +234,7 @@ export default function SyncStatus() {
       const localRaceIds = buildRaceIdsHeader();
       const localRaceId = activeSource ? getRaceIdFromSource(activeSource.url) : null;
       try {
-        localRes = await fetch(`/api/sync?mode=${mode}`, {
+        localRes = await fetch(`${apiBase}/sync?mode=${mode}`, {
           method: 'POST',
           headers: {
             ...(mode === 'full' && localRaceIds ? { 'x-matchlife-race-ids': localRaceIds } : {}),
@@ -370,7 +371,7 @@ export default function SyncStatus() {
     }
     let res: Response;
     try {
-      res = await fetch('/api/reset', { method: 'POST' });
+      res = await fetch(`${apiBase}/reset`, { method: 'POST' });
     } catch (e: unknown) {
       const localHint =
         hasServiceRoleKey === false

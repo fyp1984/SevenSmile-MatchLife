@@ -11,6 +11,7 @@ const DataSources = lazy(() => import('./pages/DataSources'));
 const WechatGate = lazy(() => import('./pages/WechatGate'));
 const WechatComplete = lazy(() => import('./pages/WechatComplete'));
 const Follow = lazy(() => import('./pages/Follow'));
+const Guide = lazy(() => import('./pages/Guide'));
 const PlayerCareer = lazy(() => import('./pages/PlayerCareer').then(m => ({ default: m.PlayerCareer })));
 const MatchDetail = lazy(() => import('./pages/MatchDetail').then(m => ({ default: m.MatchDetail })));
 const MatchTagging = lazy(() => import('./pages/MatchTagging'));
@@ -42,6 +43,8 @@ function App() {
             <Route path="matches/:id" element={<MatchDetail />} />
             <Route path="matches/:matchId/tagging" element={<MatchTagging />} />
             <Route path="sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
+            <Route path="data-sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
+            <Route path="guide" element={<Guide />} />
             <Route path="gate" element={<AccessGate />} />
             <Route path="gate/wechat" element={<WechatGate />} />
             <Route path="wechat/complete" element={<WechatComplete />} />

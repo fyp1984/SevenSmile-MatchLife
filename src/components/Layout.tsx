@@ -1,10 +1,18 @@
-import { Outlet, Link } from 'react-router-dom';
+import { Outlet, Link, NavLink } from 'react-router-dom';
+import { BookOpen } from 'lucide-react';
 import logoImg from '../assets/logo.svg';
 import { useVisitTracker } from '../hooks/useVisitTracker';
 import SportTabBar from './SportTabBar';
 
 export default function Layout() {
   useVisitTracker();
+
+  const navClassName = ({ isActive }: { isActive: boolean }) =>
+    `whitespace-nowrap rounded-full px-3 py-1.5 font-medium transition-colors ${
+      isActive
+        ? 'bg-orange-100 text-orange-700'
+        : 'text-brand-brown hover:bg-orange-50 hover:text-orange-500'
+    }`;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-orange-50 to-white text-brand-brown font-sans relative overflow-hidden">
@@ -25,24 +33,36 @@ export default function Layout() {
             </span>
           </Link>
           <nav className="flex w-full items-center gap-2 overflow-x-auto pb-1 text-xs sm:w-auto sm:gap-4 sm:overflow-visible sm:pb-0 sm:text-base">
-            <Link to="/" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
+            <NavLink to="/" end className={navClassName}>
               首页检索
-            </Link>
-            <Link to="/stats" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
+            </NavLink>
+            <NavLink to="/stats" className={navClassName}>
               赛事看板
-            </Link>
-            <Link to="/leaderboard" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
+            </NavLink>
+            <NavLink to="/leaderboard" className={navClassName}>
               排行榜
-            </Link>
-            <Link to="/sources" className="whitespace-nowrap rounded-full px-3 py-1.5 text-brand-brown font-medium hover:bg-orange-50 hover:text-orange-500 transition-colors">
+            </NavLink>
+            <NavLink to="/data-sources" className={navClassName}>
               数据源
-            </Link>
-            <Link
+            </NavLink>
+            <NavLink
               to="/sync"
-              className="whitespace-nowrap rounded-full bg-orange-100 px-3 py-1.5 text-xs font-medium text-orange-700 transition-colors hover:bg-orange-200 sm:text-sm"
+              className={({ isActive }) =>
+                `whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${
+                  isActive
+                    ? 'bg-orange-100 text-orange-700'
+                    : 'text-brand-brown hover:bg-orange-50 hover:text-orange-500'
+                }`
+              }
             >
               数据状态
-            </Link>
+            </NavLink>
+            <NavLink to="/guide" className={navClassName} title="查看系统使用文档">
+              <span className="inline-flex items-center gap-1.5">
+                <BookOpen className="h-4 w-4" />
+                使用文档
+              </span>
+            </NavLink>
           </nav>
         </div>
       </header>

@@ -21,7 +21,7 @@ WITH player_matches AS (
     m.winner_side,
     m.players_a,
     m.players_b,
-    m.match_date,
+    m.start_time as match_date,
     CASE 
       WHEN m.winner_side = 'A' AND p.player_name = ANY(m.players_a) THEN 1
       WHEN m.winner_side = 'B' AND p.player_name = ANY(m.players_b) THEN 1

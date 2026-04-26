@@ -1,8 +1,10 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X, Share2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
+import { DATA_SOURCE_CONTACT_HINT } from '../lib/dataSourceHints';
+import ShareModal from '../components/ShareModal';
 
 type MatchRow = {
   id: string;
@@ -37,6 +39,61 @@ const MATCH_SELECT =
   'id, category, tournament_name, start_time, source_updated_at, match_started_at, match_ended_at, match_time_name, city, location, players_a, players_b, score_text, winner_side, event_key, round_name';
 
 const MAX_CACHE_SIZE = 100;
+const FALLBACK_SEARCH_LIMIT = 200;
+
+type SuggestionRow = {
+  players_text?: string | null;
+  tournament_name?: string | null;
+  players_a?: string[] | null;
+  players_b?: string[] | null;
+};
+
+type SuggestionRpcRow = {
+  suggestion: string;
+  suggestion_type: string;
+};
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const record = error as { message?: string; details?: string; hint?: string; error_description?: string };
+    return String(record.message || record.details || record.hint || record.error_description || JSON.stringify(error));
+  }
+  return String(error || '');
+}
+
+function isMissingPlayersTextError(error: unknown) {
+  const message = getErrorMessage(error);
+  return /players_text/i.test(message) && /(column|schema cache|does not exist)/i.test(message);
+}
+
+function isMissingSearchRpcError(error: unknown) {
+  const message = getErrorMessage(error);
+  return /matchlife_search_matches/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
+}
+
+function isMissingSuggestionRpcError(error: unknown) {
+  const message = getErrorMessage(error);
+  return /matchlife_search_suggestions/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
+}
+
+function matchContainsKeyword(match: MatchRow, keyword: string) {
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  if (!normalizedKeyword) return true;
+  return [
+    match.tournament_name,
+    match.event_key,
+    match.round_name,
+    match.match_time_name,
+    match.category,
+    match.city,
+    match.location,
+    ...(match.players_a || []),
+    ...(match.players_b || []),
+  ]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(normalizedKeyword));
+}
 
 function createLRUCache<K, V>(maxSize: number) {
   const cache = new Map<K, V>();
@@ -86,6 +143,18 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const debounceTimerRef = useRef<number | null>(null);
+
+  const [shareData, setShareData] = useState<any>(null);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOpenShare = (e: any) => {
+      setShareData(e.detail);
+      setIsShareModalOpen(true);
+    };
+    window.addEventListener('open-share-modal', handleOpenShare);
+    return () => window.removeEventListener('open-share-modal', handleOpenShare);
+  }, []);
 
   const matchTs = (m: MatchRow) => {
     const t1 = m.start_time ? Date.parse(m.start_time) : NaN;
@@ -258,6 +327,7 @@ export default function Home() {
     const request = supabase
       .from('matches')
       .select(MATCH_SELECT)
+      .order('start_time', { ascending: false, nullsFirst: false })
       .order('source_updated_at', { ascending: false, nullsFirst: false })
       .limit(5);
     const { data, error } = await Promise.race([
@@ -274,6 +344,25 @@ export default function Home() {
     } else {
       setLoading(false);
     }
+  };
+
+  const createFilteredMatchRequest = () => {
+    let request = supabase.from('matches').select(MATCH_SELECT);
+
+    if (dateFrom) {
+      request = request.gte('start_time', dateFrom);
+    }
+    if (dateTo) {
+      request = request.lte('start_time', dateTo);
+    }
+    if (categoryFilter) {
+      request = request.ilike('category', `%${categoryFilter}%`);
+    }
+    if (tournamentFilter) {
+      request = request.ilike('tournament_name', `%${tournamentFilter}%`);
+    }
+
+    return request;
   };
 
   const handleSearch = async (
@@ -313,103 +402,42 @@ export default function Home() {
       setSearched(true);
     }
     try {
-      const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
-      let primaryRequest = supabase
-        .from('matches')
-        .select(MATCH_SELECT)
-        .or(
-          [
-            `tournament_name.ilike.%${escaped}%`,
-            `players_text.ilike.%${escaped}%`,
-            `event_key.ilike.%${escaped}%`,
-          ].join(',')
-        );
-      
-      if (dateFrom) {
-        primaryRequest = primaryRequest.gte('start_time', dateFrom);
-      }
-      if (dateTo) {
-        primaryRequest = primaryRequest.lte('start_time', dateTo);
-      }
-      if (categoryFilter) {
-        primaryRequest = primaryRequest.ilike('category', `%${categoryFilter}%`);
-      }
-      if (tournamentFilter) {
-        primaryRequest = primaryRequest.ilike('tournament_name', `%${tournamentFilter}%`);
-      }
-      
-      primaryRequest = primaryRequest.order('source_updated_at', { ascending: false, nullsFirst: false }).limit(20);
-      
-      const primary = await Promise.race([
-        primaryRequest,
-        new Promise<{ data: null; error: Error }>((resolve) => {
-          window.setTimeout(() => resolve({ data: null, error: new Error('检索超时，请缩短关键词后重试。') }), 5_000);
-        }),
-      ]);
+      const rpc = await supabase.rpc('matchlife_search_matches', {
+        p_keyword: keyword,
+        p_date_from: dateFrom || null,
+        p_date_to: dateTo || null,
+        p_category_filter: categoryFilter || null,
+        p_tournament_filter: tournamentFilter || null,
+        p_limit: 20,
+      });
 
-      if (primary.error) {
-        setErrorMsg(primary.error.message);
-      } else if (primary.data) {
-        const primaryRows = primary.data as MatchRow[];
-        if (primaryRows.length >= 8) {
-          applyMatches(primaryRows);
-          searchCacheRef.current.set(cacheKey, primaryRows);
-          return;
-        }
-
-        let secondaryRequest = supabase
-          .from('matches')
-          .select(MATCH_SELECT)
-          .or(
-            [
-              `round_name.ilike.%${escaped}%`,
-              `match_time_name.ilike.%${escaped}%`,
-              `category.ilike.%${escaped}%`,
-              `city.ilike.%${escaped}%`,
-              `location.ilike.%${escaped}%`,
-            ].join(',')
-          );
-        
-        if (dateFrom) {
-          secondaryRequest = secondaryRequest.gte('start_time', dateFrom);
-        }
-        if (dateTo) {
-          secondaryRequest = secondaryRequest.lte('start_time', dateTo);
-        }
-        if (categoryFilter) {
-          secondaryRequest = secondaryRequest.ilike('category', `%${categoryFilter}%`);
-        }
-        if (tournamentFilter) {
-          secondaryRequest = secondaryRequest.ilike('tournament_name', `%${tournamentFilter}%`);
-        }
-        
-        secondaryRequest = secondaryRequest.order('source_updated_at', { ascending: false, nullsFirst: false }).limit(20);
-        
-        const secondary = await Promise.race([
-          secondaryRequest,
-          new Promise<{ data: null; error: Error }>((resolve) => {
-            window.setTimeout(() => resolve({ data: null, error: new Error('检索超时，请稍后重试。') }), 6_000);
-          }),
-        ]);
-        if (secondary.error) {
-          setErrorMsg(secondary.error.message);
-          applyMatches(primaryRows);
-          searchCacheRef.current.set(cacheKey, primaryRows);
-          return;
-        }
-
-        const secondaryRows = (secondary.data || []) as MatchRow[];
-        const merged = [...primaryRows];
-        const seen = new Set(primaryRows.map((item) => item.id));
-        for (const row of secondaryRows) {
-          if (!seen.has(row.id)) {
-            merged.push(row);
-            seen.add(row.id);
-          }
-        }
-        applyMatches(merged.slice(0, 20));
-        searchCacheRef.current.set(cacheKey, merged.slice(0, 20));
+      if (!rpc.error) {
+        const rows = (rpc.data || []) as MatchRow[];
+        applyMatches(rows);
+        searchCacheRef.current.set(cacheKey, rows);
+        return;
       }
+
+      if (!isMissingSearchRpcError(rpc.error) && !isMissingPlayersTextError(rpc.error)) {
+        setErrorMsg(getErrorMessage(rpc.error));
+        return;
+      }
+
+      const fallback = await createFilteredMatchRequest()
+        .order('start_time', { ascending: false, nullsFirst: false })
+        .order('source_updated_at', { ascending: false, nullsFirst: false })
+        .limit(FALLBACK_SEARCH_LIMIT);
+
+      if (fallback.error) {
+        setErrorMsg(getErrorMessage(fallback.error));
+        return;
+      }
+
+      const fallbackRows = ((fallback.data || []) as MatchRow[])
+        .filter((match) => matchContainsKeyword(match, keyword))
+        .slice(0, 20);
+      applyMatches(fallbackRows);
+      searchCacheRef.current.set(cacheKey, fallbackRows);
     } finally {
       inFlightRef.current = false;
       if (options?.silent) {
@@ -435,18 +463,52 @@ export default function Home() {
       setShowSuggestions(false);
       return;
     }
-    const escaped = q.trim().replace(/[%_,]/g, (m) => `\\${m}`);
-    const { data } = await supabase
+    const keyword = q.trim();
+    const rpc = await supabase.rpc('matchlife_search_suggestions', {
+      p_keyword: keyword,
+      p_limit: 8,
+    });
+
+    if (!rpc.error) {
+      const results = Array.from(
+        new Set(
+          ((rpc.data || []) as SuggestionRpcRow[])
+            .map((item) => String(item.suggestion || '').trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 8);
+      setSuggestions(results);
+      setShowSuggestions(results.length > 0);
+      return;
+    }
+
+    if (!isMissingSuggestionRpcError(rpc.error)) {
+      return;
+    }
+
+    const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
+    const { data, error } = await supabase
       .from('matches')
       .select('players_text, tournament_name')
       .or(`players_text.ilike.%${escaped}%,tournament_name.ilike.%${escaped}%`)
       .limit(10);
-    
-    if (!data) return;
+
+    let rows = (data || []) as SuggestionRow[];
+    if (error && isMissingPlayersTextError(error)) {
+      const fallback = await supabase
+        .from('matches')
+        .select('players_a, players_b, tournament_name')
+        .order('start_time', { ascending: false, nullsFirst: false })
+        .limit(30);
+      if (fallback.error) return;
+      rows = (fallback.data || []) as SuggestionRow[];
+    }
+
+    if (!rows.length) return;
     const seen = new Set<string>();
     const results: string[] = [];
-    for (const row of data) {
-      if (row.tournament_name && row.tournament_name.toLowerCase().includes(q.toLowerCase())) {
+    for (const row of rows) {
+      if (row.tournament_name && row.tournament_name.toLowerCase().includes(keyword.toLowerCase())) {
         if (!seen.has(row.tournament_name)) {
           seen.add(row.tournament_name);
           results.push(row.tournament_name);
@@ -456,10 +518,17 @@ export default function Home() {
         const parts = row.players_text.split(/\s+vs\s+/i);
         for (const part of parts) {
           const trimmed = part.trim();
-          if (trimmed && trimmed.toLowerCase().includes(q.toLowerCase()) && !seen.has(trimmed)) {
+          if (trimmed && trimmed.toLowerCase().includes(keyword.toLowerCase()) && !seen.has(trimmed)) {
             seen.add(trimmed);
             results.push(trimmed);
           }
+        }
+      }
+      for (const player of [...(row.players_a || []), ...(row.players_b || [])]) {
+        const trimmed = String(player || '').trim();
+        if (trimmed && trimmed.toLowerCase().includes(keyword.toLowerCase()) && !seen.has(trimmed)) {
+          seen.add(trimmed);
+          results.push(trimmed);
         }
       }
       if (results.length >= 8) break;
@@ -737,16 +806,15 @@ export default function Home() {
             </div>
           ) : matches.length > 0 ? (
             matches.map((match, idx) => (
-              <Link
+              <div
                 key={match.id}
-                to={`/matches/${match.id}`}
-                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow cursor-pointer ${
+                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow ${
                   idx === 0 && match.winner_side === 'UNKNOWN'
                     ? 'bg-orange-50/70 border-orange-100'
                     : 'bg-white border-orange-50'
                 }`}
               >
-                <div className="flex-1">
+                <div className="flex-1 cursor-pointer" onClick={() => window.location.href = `/matches/${match.id}`}>
                   <div className="flex items-center gap-2 mb-2">
                     <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-bold">{match.category}</span>
                     {match.round_name && (
@@ -777,30 +845,63 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 bg-orange-50/50 px-4 md:px-6 py-4 rounded-2xl w-full md:w-auto">
-                  <div className="text-right flex-1 md:flex-none">
-                    <div className={`font-bold ${match.winner_side === 'A' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
-                      {match.players_a.join(' / ')}
+                <div className="flex flex-col items-end gap-3">
+                  <div className="flex items-center justify-between md:justify-end gap-2 md:gap-6 bg-orange-50/50 px-4 md:px-6 py-4 rounded-2xl w-full md:w-auto cursor-pointer" onClick={() => window.location.href = `/matches/${match.id}`}>
+                    <div className="text-right flex-1 md:flex-none">
+                      <div className={`font-bold ${match.winner_side === 'A' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
+                        {match.players_a?.join(' / ')}
+                      </div>
+                      {match.winner_side === 'A' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
                     </div>
-                    {match.winner_side === 'A' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
+                    
+                    <div className="text-xl md:text-2xl font-extrabold text-brand-brown tracking-wider bg-white px-3 md:px-4 py-1 rounded-xl shadow-sm border border-orange-100 flex-shrink-0">
+                      {match.score_text}
+                    </div>
+                    
+                    <div className="text-left flex-1 md:flex-none">
+                      <div className={`font-bold ${match.winner_side === 'B' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
+                        {match.players_b?.join(' / ')}
+                      </div>
+                      {match.winner_side === 'B' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
+                    </div>
                   </div>
                   
-                  <div className="text-xl md:text-2xl font-extrabold text-brand-brown tracking-wider bg-white px-3 md:px-4 py-1 rounded-xl shadow-sm border border-orange-100 flex-shrink-0">
-                    {match.score_text}
-                  </div>
-                  
-                  <div className="text-left flex-1 md:flex-none">
-                    <div className={`font-bold ${match.winner_side === 'B' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
-                      {match.players_b.join(' / ')}
-                    </div>
-                    {match.winner_side === 'B' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      import('../components/ShareModal').then(({ default: ShareModal }) => {
+                        // Dynamically render or dispatch event to open share modal for this match
+                        // Since we can't easily add a state variable per row without a component, 
+                        // we'll dispatch a custom event that the parent can listen to
+                        window.dispatchEvent(new CustomEvent('open-share-modal', { 
+                          detail: {
+                            type: 'match',
+                            tournamentName: match.tournament_name,
+                            playerA: match.players_a?.join(' / ') || '',
+                            playerB: match.players_b?.join(' / ') || '',
+                            score: match.score_text || '',
+                            date: match.start_time ? format(new Date(match.start_time), 'yyyy-MM-dd') : '',
+                            eventKey: match.category,
+                            winnerSide: match.winner_side,
+                            qrCodeUrl: `${window.location.origin}/matches/${match.id}`,
+                          }
+                        }));
+                      });
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-xl text-xs font-bold transition-colors"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    分享比赛
+                  </button>
                 </div>
-              </Link>
+              </div>
             ))
           ) : (
             <div className="text-center py-12 bg-white/50 rounded-3xl border border-orange-50">
               <p className="text-brand-gray text-lg">没有找到相关比赛记录</p>
+              <p className="mt-2 text-sm text-brand-gray">{DATA_SOURCE_CONTACT_HINT}</p>
             </div>
           )}
         </div>
@@ -840,6 +941,16 @@ export default function Home() {
       </div>
       )}
 
+      {shareData && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          data={shareData}
+          shareUrl={shareData.qrCodeUrl}
+          shareTitle={`比赛战况：${shareData.tournamentName}`}
+          shareDesc={`${shareData.playerA} vs ${shareData.playerB}，比分 ${shareData.score}`}
+        />
+      )}
     </div>
   );
 }

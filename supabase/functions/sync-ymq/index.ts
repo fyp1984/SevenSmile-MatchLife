@@ -97,6 +97,24 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
 
 function computeWinner(row: MatchRow): "A" | "B" | "UNKNOWN" {
   if (row.scoreStatusNo !== 2) return "UNKNOWN";
+  const scoreOne = Number(row.scoreOne ?? NaN);
+  const scoreTwo = Number(row.scoreTwo ?? NaN);
+  if (Number.isFinite(scoreOne) && Number.isFinite(scoreTwo) && scoreOne !== scoreTwo) {
+    return scoreOne > scoreTwo ? "A" : "B";
+  }
+  if (Array.isArray(row.gameScores) && row.gameScores.length > 0) {
+    let setsA = 0;
+    let setsB = 0;
+    for (const set of row.gameScores) {
+      const a = Number(set?.scoreOne ?? NaN);
+      const b = Number(set?.scoreTwo ?? NaN);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) continue;
+      if (a > b) setsA += 1;
+      if (b > a) setsB += 1;
+    }
+    if (setsA > setsB) return "A";
+    if (setsB > setsA) return "B";
+  }
   const a = Number(row.battleScoreOne ?? 0);
   const b = Number(row.battleScoreTwo ?? 0);
   if (a > b) return "A";

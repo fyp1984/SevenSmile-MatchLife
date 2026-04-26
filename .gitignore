@@ -15,6 +15,11 @@ tmp/
 .playwright-mcp/
 .sisyphus/
 .claude/
+test-screenshots/
+leaderboard-*.png
+player-career-*.png
+test-page.js
+tennis-sample.json
 
 desktop-*.png
 mobile-*.png
