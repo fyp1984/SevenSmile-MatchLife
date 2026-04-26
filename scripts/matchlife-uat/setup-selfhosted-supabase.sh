@@ -69,22 +69,8 @@ sudo -n install -d -m 755 "${TMP_MIGRATIONS_DIR}"
 sudo -n cp "${MIGRATIONS_DIR}"/*.sql "${TMP_MIGRATIONS_DIR}/"
 sudo -n chmod 644 "${TMP_MIGRATIONS_DIR}"/*.sql
 
-MIGRATION_ORDER=(
-  "initial_schema.sql"
-  "matchlife_event_dimensions.sql"
-  "matchlife_match_round.sql"
-  "matchlife_match_times.sql"
-  "matchlife_search_trgm.sql"
-  "matchlife_visit_stats.sql"
-  "rls_policies_and_match_fields.sql"
-)
-
-for name in "${MIGRATION_ORDER[@]}"; do
-  file="${TMP_MIGRATIONS_DIR}/${name}"
-  if [[ ! -f "${file}" ]]; then
-    echo "skip missing migration: ${name}"
-    continue
-  fi
+for file in $(ls "${TMP_MIGRATIONS_DIR}"/*.sql | sort); do
+  name=$(basename "${file}")
   sudo -n -u postgres psql -d "${DB_NAME}" -v ON_ERROR_STOP=1 -f "${file}" >/tmp/"${name}".log
   echo "applied: ${name}"
 done

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, supabaseAnonKey, supabaseUrl } from '../lib/supabase';
-import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { Activity, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download, Share2 } from 'lucide-react';
+import ShareModal from '../components/ShareModal';
+import type { StatsShareData } from '../lib/shareCard';
+import { DATA_SOURCE_CONTACT_HINT } from '../lib/dataSourceHints';
 
 type MatchLite = {
   players_a: string[];
@@ -9,8 +12,12 @@ type MatchLite = {
   category: string;
   winner_side: 'A' | 'B' | 'UNKNOWN';
   event_key: string | null;
-  start_time: string | null;
-  source_updated_at: string | null;
+};
+
+type RecentTournamentRow = {
+  tournament_name: string;
+  latest_at: string;
+  match_count: number;
 };
 
 type TeamStat = {
@@ -27,10 +34,29 @@ type StatsModel = {
   totalPlayers: number;
   totalTournaments: number;
   selectedTournament: string;
-  topCategories: Array<[string, number]>;
+  topCategories: Array<{ category: string; count: number }>;
   eventTabs: Array<{ eventKey: string; matchCount: number; finishedCount: number }>;
   rankingByEvent: Record<string, TeamStat[]>;
 };
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const record = error as { message?: string; details?: string; hint?: string; error_description?: string };
+    return String(record.message || record.details || record.hint || record.error_description || JSON.stringify(error));
+  }
+  return String(error || '');
+}
+
+function isMissingRecentTournamentsRpc(error: unknown) {
+  const message = getErrorMessage(error);
+  return /matchlife_list_recent_tournaments/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
+}
+
+function isMissingTournamentStatsRpc(error: unknown) {
+  const message = getErrorMessage(error);
+  return /matchlife_get_tournament_stats/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
+}
 
 function normalizeEventLabel(eventKey: string) {
   return eventKey.replace(/^([0-9]{1,2})岁\1岁/, '$1岁');
@@ -40,279 +66,304 @@ function toTeamName(list: string[] | null | undefined) {
   return (list || []).filter(Boolean).join(' / ').trim();
 }
 
-export default function Stats() {
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [stats, setStats] = useState<StatsModel | null>(null);
-  const [activeEventKey, setActiveEventKey] = useState<string>('');
-  const [allRows, setAllRows] = useState<MatchLite[]>([]);
-  const [tournamentQuery, setTournamentQuery] = useState('');
-  const [selectedTournament, setSelectedTournament] = useState('');
-  const [recentTournaments, setRecentTournaments] = useState<Array<{ tournament_name: string; latest_at: string; match_count: number }>>([]);
-  const [loadingRecent, setLoadingRecent] = useState(true);
-  const [selectedForLoad, setSelectedForLoad] = useState('');
-  const [loadedTournament, setLoadedTournament] = useState('');
-  const [loadingProgress, setLoadingProgress] = useState<{ loaded: number; total: number } | null>(null);
-  const refreshTimerRef = useRef<number | null>(null);
-  const lastRefreshAtRef = useRef<number>(0);
+function buildStatsModel(rows: MatchLite[], tournamentName: string): StatsModel {
+  const playersSet = new Set<string>();
+  const tournamentsSet = new Set<string>();
+  const categoryCount: Record<string, number> = {};
+  const eventCount: Record<string, number> = {};
+  const eventFinishedCount: Record<string, number> = {};
+  const rankMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
+  let finishedMatches = 0;
 
-  useEffect(() => {
-    fetchRecentTournaments();
-  }, []);
+  for (const m of rows) {
+    for (const p of m.players_a || []) playersSet.add(p);
+    for (const p of m.players_b || []) playersSet.add(p);
+    if (m.tournament_name) tournamentsSet.add(m.tournament_name);
 
-  const fetchRecentTournaments = async () => {
-    setLoadingRecent(true);
-    const { data, error } = await supabase.rpc('matchlife_list_recent_tournaments', { p_limit: 40 });
-    if (error) {
-      setErrorMsg(error.message);
-      setLoadingRecent(false);
-      return;
-    }
-    const rows = (data || []) as Array<{ tournament_name: string; latest_at: string; match_count: number }>;
-    setRecentTournaments(rows);
-    if (!selectedForLoad && rows[0]?.tournament_name) {
-      setSelectedForLoad(rows[0].tournament_name);
-    }
-    setLoadingRecent(false);
-  };
+    const category = m.category || '未识别组别';
+    categoryCount[category] = (categoryCount[category] || 0) + 1;
 
-  const fetchStatsSource = async (forcedTournament?: string) => {
-    const targetTournament = (forcedTournament || selectedForLoad || selectedTournament || '').trim();
-    if (!targetTournament) {
-      setErrorMsg('请先选择赛事后再点击"加载统计"。');
-      return;
-    }
-    setLoading(true);
-    setErrorMsg(null);
-    setLoadingProgress(null);
+    const eventKey = m.event_key || '未识别项目';
+    eventCount[eventKey] = (eventCount[eventKey] || 0) + 1;
 
-    const base = supabaseUrl.replace(/\/$/, '');
-    const BATCH_SIZE = 200;
+    const a = toTeamName(m.players_a);
+    const b = toTeamName(m.players_b);
+    if (!a || !b) continue;
 
-    try {
-      // 首次加载前200条数据
-      const firstBatchEndpoint =
-        `${base}/rest/v1/matches` +
-        `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
-        `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
-        `&limit=${BATCH_SIZE}` +
-        `&order=start_time.desc.nullslast`;
-
-      const firstResponse = await fetch(firstBatchEndpoint, {
-        method: 'GET',
-        headers: {
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          Prefer: 'count=exact',
-        },
-      });
-
-      if (!firstResponse.ok) {
-        const detail = await firstResponse.text().catch(() => '');
-        throw new Error(`加载统计失败（${firstResponse.status}）：${detail || '请求未成功'}`);
-      }
-
-      const firstBatch = (await firstResponse.json()) as MatchLite[];
-      const totalCount = parseInt(firstResponse.headers.get('content-range')?.split('/')[1] || '0', 10);
-
-      // 立即渲染首批数据
-      setAllRows(firstBatch);
-      setSelectedTournament(targetTournament);
-      setLoadedTournament(targetTournament);
-      setLoadingProgress({ loaded: firstBatch.length, total: totalCount });
-
-      // 如果还有更多数据，后台继续加载
-      if (totalCount > BATCH_SIZE) {
-        const remainingBatches = Math.ceil((totalCount - BATCH_SIZE) / BATCH_SIZE);
-        const allRows = [...firstBatch];
-
-        for (let i = 0; i < remainingBatches; i++) {
-          const offset = BATCH_SIZE * (i + 1);
-          const batchEndpoint =
-            `${base}/rest/v1/matches` +
-            `?select=players_a,players_b,tournament_name,category,winner_side,event_key,start_time,source_updated_at` +
-            `&tournament_name=eq.${encodeURIComponent(targetTournament)}` +
-            `&limit=${BATCH_SIZE}` +
-            `&offset=${offset}` +
-            `&order=start_time.desc.nullslast`;
-
-          const batchResponse = await fetch(batchEndpoint, {
-            method: 'GET',
-            headers: {
-              apikey: supabaseAnonKey,
-              Authorization: `Bearer ${supabaseAnonKey}`,
-            },
-          });
-
-          if (batchResponse.ok) {
-            const batch = (await batchResponse.json()) as MatchLite[];
-            allRows.push(...batch);
-            setAllRows([...allRows]);
-            setLoadingProgress({ loaded: allRows.length, total: totalCount });
-          }
-        }
-      }
-
-      setLoadingProgress(null);
-      setLoading(false);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      setErrorMsg(msg);
-      setLoading(false);
-      setLoadingProgress(null);
-    }
-  };
-
-  useEffect(() => {
-    if (allRows.length === 0) {
-      setStats(null);
-      return;
-    }
-
-    const sortedTournamentNames = recentTournaments.map((row) => row.tournament_name);
-
-    const normalizedQuery = tournamentQuery.trim().toLowerCase();
-    const matchedTournamentNames = normalizedQuery
-      ? sortedTournamentNames.filter((name) => name.toLowerCase().includes(normalizedQuery))
-      : sortedTournamentNames;
-
-    const effectiveTournament =
-      matchedTournamentNames.includes(selectedTournament)
-        ? selectedTournament
-        : matchedTournamentNames[0] || sortedTournamentNames[0] || '';
-
-    if (effectiveTournament !== selectedTournament) setSelectedTournament(effectiveTournament);
-
-    const rows = effectiveTournament
-      ? allRows.filter((row) => row.tournament_name === effectiveTournament)
-      : allRows;
-
-    const totalMatches = rows.length;
-    const playersSet = new Set<string>();
-    const tournamentsSet = new Set<string>();
-
-    const categoryCount: Record<string, number> = {};
-    const eventCount: Record<string, number> = {};
-    const eventFinishedCount: Record<string, number> = {};
-
-    const rankMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
-
-    let finishedMatches = 0;
-
-    for (const m of rows) {
-      for (const p of m.players_a || []) playersSet.add(p);
-      for (const p of m.players_b || []) playersSet.add(p);
-      if (m.tournament_name) tournamentsSet.add(m.tournament_name);
-
-      if (m.category) categoryCount[m.category] = (categoryCount[m.category] || 0) + 1;
-
-      const eventKey = m.event_key || '未识别项目';
-      eventCount[eventKey] = (eventCount[eventKey] || 0) + 1;
-
-      const a = toTeamName(m.players_a);
-      const b = toTeamName(m.players_b);
-      if (!a || !b) continue;
-
-      if (m.winner_side === 'A' || m.winner_side === 'B') {
-        finishedMatches += 1;
-        eventFinishedCount[eventKey] = (eventFinishedCount[eventKey] || 0) + 1;
-        rankMap[eventKey] ||= {};
-        rankMap[eventKey][a] ||= { wins: 0, losses: 0 };
-        rankMap[eventKey][b] ||= { wins: 0, losses: 0 };
-        if (m.winner_side === 'A') {
-          rankMap[eventKey][a].wins += 1;
-          rankMap[eventKey][b].losses += 1;
-        } else {
-          rankMap[eventKey][b].wins += 1;
-          rankMap[eventKey][a].losses += 1;
-        }
+    if (m.winner_side === 'A' || m.winner_side === 'B') {
+      finishedMatches += 1;
+      eventFinishedCount[eventKey] = (eventFinishedCount[eventKey] || 0) + 1;
+      rankMap[eventKey] ||= {};
+      rankMap[eventKey][a] ||= { wins: 0, losses: 0 };
+      rankMap[eventKey][b] ||= { wins: 0, losses: 0 };
+      if (m.winner_side === 'A') {
+        rankMap[eventKey][a].wins += 1;
+        rankMap[eventKey][b].losses += 1;
+      } else {
+        rankMap[eventKey][b].wins += 1;
+        rankMap[eventKey][a].losses += 1;
       }
     }
+  }
 
-    const topCategories = Object.entries(categoryCount)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6) as Array<[string, number]>;
+  const topCategories = Object.entries(categoryCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([category, count]) => ({ category, count }));
 
-    const eventTabs = Object.entries(eventCount)
-      .map(([eventKey, matchCount]) => ({
-        eventKey,
-        matchCount,
-        finishedCount: eventFinishedCount[eventKey] || 0,
-      }))
-      .sort((a, b) => b.matchCount - a.matchCount);
+  const eventTabs = Object.entries(eventCount)
+    .map(([eventKey, matchCount]) => ({
+      eventKey,
+      matchCount,
+      finishedCount: eventFinishedCount[eventKey] || 0,
+    }))
+    .sort((a, b) => b.matchCount - a.matchCount);
 
-    const rankingByEvent: StatsModel['rankingByEvent'] = {};
-    for (const [eventKey, teams] of Object.entries(rankMap)) {
-      const list: TeamStat[] = Object.entries(teams).map(([team, wl]) => {
+  const rankingByEvent: Record<string, TeamStat[]> = {};
+  for (const [eventKey, teams] of Object.entries(rankMap)) {
+    rankingByEvent[eventKey] = Object.entries(teams)
+      .map(([team, wl]) => {
         const played = wl.wins + wl.losses;
         return {
           team,
           played,
           wins: wl.wins,
           losses: wl.losses,
-          winRate: played > 0 ? wl.wins / played : 0,
+          winRate: played > 0 ? Number(((wl.wins / played) * 100).toFixed(1)) : 0,
         };
-      });
-      list.sort((a, b) => {
+      })
+      .sort((a, b) => {
         if (b.wins !== a.wins) return b.wins - a.wins;
         if (b.winRate !== a.winRate) return b.winRate - a.winRate;
         if (b.played !== a.played) return b.played - a.played;
         return a.team.localeCompare(b.team);
       });
-      rankingByEvent[eventKey] = list;
-    }
+  }
 
-    const model: StatsModel = {
-      totalMatches,
-      finishedMatches,
-      totalPlayers: playersSet.size,
-      totalTournaments: tournamentsSet.size,
-      selectedTournament: effectiveTournament,
-      topCategories,
-      eventTabs,
-      rankingByEvent,
+  return {
+    totalMatches: rows.length,
+    finishedMatches,
+    totalPlayers: playersSet.size,
+    totalTournaments: tournamentsSet.size,
+    selectedTournament: tournamentName,
+    topCategories,
+    eventTabs,
+    rankingByEvent,
+  };
+}
+
+function mapRpcStats(payload: unknown): StatsModel {
+  const record = (payload || {}) as Record<string, unknown>;
+  const rawRanking = (record.rankingByEvent || {}) as Record<string, unknown>;
+  const rankingByEvent = Object.fromEntries(
+    Object.entries(rawRanking).map(([eventKey, list]) => [
+      eventKey,
+      Array.isArray(list)
+        ? list.map((item) => {
+            const row = item as Record<string, unknown>;
+            return {
+              team: String(row.team || ''),
+              played: Number(row.played || 0),
+              wins: Number(row.wins || 0),
+              losses: Number(row.losses || 0),
+              winRate: Number(row.winRate || 0),
+            };
+          })
+        : [],
+    ]),
+  );
+
+  return {
+    totalMatches: Number(record.totalMatches || 0),
+    finishedMatches: Number(record.finishedMatches || 0),
+    totalPlayers: Number(record.totalPlayers || 0),
+    totalTournaments: Number(record.totalTournaments || 0),
+    selectedTournament: String(record.selectedTournament || ''),
+    topCategories: Array.isArray(record.topCategories)
+      ? record.topCategories.map((item) => {
+          const row = item as Record<string, unknown>;
+          return { category: String(row.category || ''), count: Number(row.count || 0) };
+        })
+      : [],
+    eventTabs: Array.isArray(record.eventTabs)
+      ? record.eventTabs.map((item) => {
+          const row = item as Record<string, unknown>;
+          return {
+            eventKey: String(row.eventKey || ''),
+            matchCount: Number(row.matchCount || 0),
+            finishedCount: Number(row.finishedCount || 0),
+          };
+        })
+      : [],
+    rankingByEvent,
+  };
+}
+
+async function fetchTournamentRows(tournamentName: string) {
+  const BATCH_SIZE = 300;
+  const collected: MatchLite[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('matches')
+      .select('players_a,players_b,tournament_name,category,winner_side,event_key')
+      .eq('tournament_name', tournamentName)
+      .range(from, from + BATCH_SIZE - 1);
+
+    if (error) throw error;
+    const batch = (data || []) as MatchLite[];
+    collected.push(...batch);
+    if (batch.length < BATCH_SIZE) break;
+    from += BATCH_SIZE;
+  }
+
+  return collected;
+}
+
+export default function Stats() {
+  const [loading, setLoading] = useState(false);
+  const [backgroundLoading, setBackgroundLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [exportSuccess, setExportSuccess] = useState(false);
+  const exportFeedbackTimerRef = useRef<number | null>(null);
+  const [stats, setStats] = useState<StatsModel | null>(null);
+  const [activeEventKey, setActiveEventKey] = useState('');
+  const [tournamentQuery, setTournamentQuery] = useState('');
+  const [recentTournaments, setRecentTournaments] = useState<RecentTournamentRow[]>([]);
+  const [loadingRecent, setLoadingRecent] = useState(true);
+  const [selectedForLoad, setSelectedForLoad] = useState('');
+  const [loadedTournament, setLoadedTournament] = useState('');
+  const refreshTimerRef = useRef<number | null>(null);
+  const lastRefreshAtRef = useRef<number>(0);
+  const requestIdRef = useRef(0);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      setLoadingRecent(true);
+      const { data, error } = await supabase.rpc('matchlife_list_recent_tournaments', { p_limit: 40 });
+      if (error) {
+        if (!isMissingRecentTournamentsRpc(error)) {
+          setErrorMsg(error.message);
+          setLoadingRecent(false);
+          return;
+        }
+
+        const fallback = await supabase
+          .from('matches')
+          .select('tournament_name, start_time, source_updated_at')
+          .order('start_time', { ascending: false, nullsFirst: false })
+          .order('source_updated_at', { ascending: false, nullsFirst: false })
+          .limit(500);
+
+        if (fallback.error) {
+          setErrorMsg(getErrorMessage(fallback.error));
+          setLoadingRecent(false);
+          return;
+        }
+
+        const deduped = new Map<string, RecentTournamentRow>();
+        for (const row of (fallback.data || []) as Array<{ tournament_name: string | null; start_time: string | null; source_updated_at: string | null }>) {
+          const name = String(row.tournament_name || '').trim();
+          if (!name) continue;
+          const latestAt = row.start_time || row.source_updated_at || new Date(0).toISOString();
+          const existing = deduped.get(name);
+          if (!existing) {
+            deduped.set(name, { tournament_name: name, latest_at: latestAt, match_count: 1 });
+            continue;
+          }
+          if (Date.parse(latestAt) > Date.parse(existing.latest_at)) existing.latest_at = latestAt;
+          existing.match_count += 1;
+        }
+
+        const rows = Array.from(deduped.values()).sort((a, b) => Date.parse(b.latest_at) - Date.parse(a.latest_at)).slice(0, 40);
+        setRecentTournaments(rows);
+        if (!selectedForLoad && rows[0]?.tournament_name) setSelectedForLoad(rows[0].tournament_name);
+        setLoadingRecent(false);
+        return;
+      }
+
+      const rows = (data || []) as RecentTournamentRow[];
+      setRecentTournaments(rows);
+      if (!selectedForLoad && rows[0]?.tournament_name) setSelectedForLoad(rows[0].tournament_name);
+      setLoadingRecent(false);
+    })();
+
+    return () => {
+      if (exportFeedbackTimerRef.current) window.clearTimeout(exportFeedbackTimerRef.current);
     };
-
-    setStats(model);
-    setActiveEventKey((prev) => prev || eventTabs[0]?.eventKey || '');
-  }, [allRows, tournamentQuery, selectedTournament, recentTournaments]);
+  }, []);
 
   const tournamentOptions = useMemo(() => {
     const allNames = recentTournaments.map((row) => row.tournament_name);
-
     const q = tournamentQuery.trim().toLowerCase();
     return q ? allNames.filter((name) => name.toLowerCase().includes(q)) : allNames;
   }, [recentTournaments, tournamentQuery]);
 
   useEffect(() => {
+    if (!tournamentOptions.length) {
+      if (selectedForLoad) setSelectedForLoad('');
+      return;
+    }
+    if (!selectedForLoad || !tournamentOptions.includes(selectedForLoad)) {
+      setSelectedForLoad(tournamentOptions[0]);
+    }
+  }, [tournamentOptions, selectedForLoad]);
+
+  const fetchStatsSource = async (forcedTournament?: string, silent = false) => {
+    const targetTournament = (forcedTournament || selectedForLoad || tournamentOptions[0] || '').trim();
+    if (!targetTournament) {
+      setErrorMsg('请先从下方推荐赛事中选择目标赛事后再点击“加载统计”。');
+      return;
+    }
+    if (!silent && (loading || backgroundLoading)) return;
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    if (silent) setBackgroundLoading(true);
+    else setLoading(true);
+    setErrorMsg(null);
+
+    try {
+      const rpc = await supabase.rpc('matchlife_get_tournament_stats', { p_tournament_name: targetTournament });
+      let nextStats: StatsModel;
+
+      if (rpc.error) {
+        if (!isMissingTournamentStatsRpc(rpc.error)) throw rpc.error;
+        const rows = await fetchTournamentRows(targetTournament);
+        nextStats = buildStatsModel(rows, targetTournament);
+      } else {
+        nextStats = mapRpcStats(rpc.data);
+      }
+
+      if (requestIdRef.current !== requestId) return;
+      setStats(nextStats);
+      setLoadedTournament(targetTournament);
+      setActiveEventKey((prev) => (prev && nextStats.rankingByEvent[prev] ? prev : nextStats.eventTabs[0]?.eventKey || ''));
+    } catch (error) {
+      if (requestIdRef.current !== requestId) return;
+      setErrorMsg(getErrorMessage(error));
+    } finally {
+      if (requestIdRef.current !== requestId) return;
+      setLoading(false);
+      setBackgroundLoading(false);
+    }
+  };
+
+  useEffect(() => {
     if (!loadedTournament) return;
     const channel = supabase
-      .channel(`ml_stats_${Date.now()}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'matches' },
-        (payload: unknown) => {
-          const now = Date.now();
-          if (now - lastRefreshAtRef.current < 2000) return;
-
-          const p = (typeof payload === 'object' && payload !== null) ? (payload as Record<string, unknown>) : {};
-          const eventType = p['eventType'];
-          if (eventType === 'UPDATE') {
-            const nextRow = (typeof p['new'] === 'object' && p['new'] !== null) ? (p['new'] as Record<string, unknown>) : {};
-            const prevRow = (typeof p['old'] === 'object' && p['old'] !== null) ? (p['old'] as Record<string, unknown>) : {};
-            const nextWinner = nextRow['winner_side'];
-            const prevWinner = prevRow['winner_side'];
-            if (nextWinner === prevWinner) return;
-            if (nextWinner !== 'A' && nextWinner !== 'B') return;
-          }
-
-          if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = window.setTimeout(() => {
-            lastRefreshAtRef.current = Date.now();
-            fetchStatsSource(loadedTournament);
-          }, 600);
-        }
-      )
+      .channel(`ml_stats_${loadedTournament}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => {
+        const now = Date.now();
+        if (now - lastRefreshAtRef.current < 2000) return;
+        if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = window.setTimeout(() => {
+          lastRefreshAtRef.current = Date.now();
+          void fetchStatsSource(loadedTournament, true);
+        }, 600);
+      })
       .subscribe();
 
     return () => {
@@ -355,7 +406,34 @@ export default function Stats() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setExportSuccess(true);
+    if (exportFeedbackTimerRef.current) {
+      window.clearTimeout(exportFeedbackTimerRef.current);
+    }
+    exportFeedbackTimerRef.current = window.setTimeout(() => {
+      setExportSuccess(false);
+    }, 4000);
   };
+
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const fullUrl = `${window.location.origin}${baseUrl}stats?sport=badminton`.replace(/([^:]\/)\/+/g, '$1');
+  
+  const shareData: StatsShareData | null = stats ? {
+    type: 'stats',
+    tournamentName: stats.selectedTournament,
+    topPlayers: activeRanking.slice(0, 3).map(r => ({
+      name: r.team,
+      wins: r.wins,
+      winRate: r.winRate * 100,
+    })),
+    totalMatches: stats.totalMatches,
+    qrCodeUrl: fullUrl,
+  } : null;
+
+  const shareUrl = fullUrl;
+  const shareTitle = stats ? `${stats.selectedTournament} 排行榜 - 七笑果 MatchLife` : '赛事排行榜';
+  const shareDesc = stats ? `总场次：${stats.totalMatches} | 参赛人数：${stats.totalPlayers}` : '查看最新赛事排行榜';
 
   if (loadingRecent) {
     return <div className="p-20 text-center text-orange-500 font-bold">正在加载赛事列表...</div>;
@@ -372,13 +450,6 @@ export default function Stats() {
           {errorMsg}
         </div>
       )}
-      {loadingProgress && (
-        <div className="w-full mb-6 bg-blue-50 border border-blue-200 text-blue-700 px-6 py-4 rounded-3xl text-sm font-medium flex items-center gap-3">
-          <BarChart3 className="w-4 h-4 animate-pulse" />
-          <span>正在加载数据：{loadingProgress.loaded} / {loadingProgress.total} 条记录</span>
-        </div>
-      )}
-
       <div className="w-full bg-white/70 backdrop-blur-sm rounded-3xl border border-orange-100 p-5 mb-8">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
           <div className="flex-1">
@@ -425,21 +496,25 @@ export default function Stats() {
             onClick={() => {
               void fetchStatsSource(selectedForLoad);
             }}
-            disabled={loading}
+            disabled={loading || backgroundLoading}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-5 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <BarChart3 className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            {loading ? '加载中...' : '加载统计'}
+            <BarChart3 className={`h-4 w-4 ${loading || backgroundLoading ? 'animate-spin' : ''}`} />
+            {loading ? '加载中...' : backgroundLoading ? '后台补齐中...' : '加载统计'}
           </button>
         </div>
       </div>
 
       {!stats ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-8 text-center text-brand-gray">
-          {loading ? '正在生成看板数据...' : '请选择赛事后点击“加载统计”。'}
+          {loading
+            ? '正在生成看板数据...'
+            : loadedTournament
+              ? `赛事“${loadedTournament}”当前暂无可统计数据。${DATA_SOURCE_CONTACT_HINT}`
+              : '请选择赛事后点击“加载统计”。'}
         </div>
       ) : (
-      <div className={`w-full grid grid-cols-1 md:grid-cols-4 gap-6 mb-12 ${loading ? 'opacity-70' : ''}`}>
+      <div className={`w-full grid grid-cols-1 md:grid-cols-4 gap-6 mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-sm border border-orange-50 flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-500 flex-shrink-0">
             <Activity className="w-7 h-7" />
@@ -482,31 +557,31 @@ export default function Stats() {
       </div>
       )}
       {stats && (
-      <div className={`w-full grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 ${loading ? 'opacity-70' : ''}`}>
+      <div className={`w-full grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
         <div className="bg-white/60 backdrop-blur-md rounded-3xl p-8 border border-orange-50">
           <h3 className="text-xl font-bold text-brand-brown mb-6 flex items-center gap-2">
             <TrendingUp className="text-orange-500 w-5 h-5" /> 热门比赛组别分布
           </h3>
           <div className="space-y-4">
-            {stats?.topCategories?.map(([cat, count], i) => (
-              <div key={cat} className="flex items-center justify-between">
+            {stats?.topCategories?.map((item, i) => (
+              <div key={item.category} className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className="w-6 h-6 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-xs font-bold">{i + 1}</span>
-                  <span className="text-brand-brown font-medium">{cat}</span>
+                  <span className="text-brand-brown font-medium">{item.category}</span>
                 </div>
                 <div className="flex items-center gap-3 w-1/2">
                   <div className="flex-1 h-2 bg-orange-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-orange-400 to-red-500 rounded-full"
-                      style={{ width: `${(count / (stats?.totalMatches || 1)) * 100}%` }}
+                      style={{ width: `${(item.count / (stats?.totalMatches || 1)) * 100}%` }}
                     />
                   </div>
-                  <span className="text-sm text-brand-gray font-bold w-10 text-right">{count}场</span>
+                  <span className="text-sm text-brand-gray font-bold w-10 text-right">{item.count}场</span>
                 </div>
               </div>
             ))}
             {(!stats?.topCategories || stats.topCategories.length === 0) && (
-              <div className="text-center text-brand-gray py-4">暂无分类数据</div>
+              <div className="text-center text-brand-gray py-4">{DATA_SOURCE_CONTACT_HINT}</div>
             )}
           </div>
         </div>
@@ -521,7 +596,7 @@ export default function Stats() {
 
       {stats && (
       <div className="w-full bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-orange-50 overflow-hidden relative">
-        {loading && (
+        {backgroundLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 text-sm font-bold text-orange-600 backdrop-blur-[1px]">
             正在更新下方统计表...
           </div>
@@ -534,15 +609,33 @@ export default function Stats() {
               </h3>
               <p className="text-sm text-brand-gray mt-1">当前为“胜场榜”口径（同胜场按胜率、场次排序）。</p>
             </div>
-            <button
-              type="button"
-              onClick={exportToCSV}
-              disabled={activeRanking.length === 0}
-              className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-4 py-2 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="w-4 h-4" />
-              导出CSV
-            </button>
+            <div className="flex flex-col items-end gap-2">
+              {exportSuccess && (
+                <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-2 text-xs font-medium text-green-700">
+                  已开始导出当前组别 CSV
+                </div>
+              )}
+              <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setIsShareModalOpen(true)}
+                disabled={!stats}
+                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-4 py-2 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Share2 className="w-4 h-4" />
+                分享排名
+              </button>
+              <button
+                type="button"
+                onClick={exportToCSV}
+                disabled={activeRanking.length === 0}
+                className="inline-flex items-center gap-2 rounded-full bg-white border-2 border-orange-500 text-orange-600 px-4 py-2 text-sm font-bold shadow-md transition hover:bg-orange-50 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                {exportSuccess ? '已开始导出' : '导出CSV'}
+              </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -589,13 +682,24 @@ export default function Stats() {
               ))}
               {activeRanking.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-10 text-center text-brand-gray">该组别暂无可计算排名的数据</td>
+                  <td colSpan={6} className="p-10 text-center text-brand-gray">{DATA_SOURCE_CONTACT_HINT}</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+      )}
+
+      {shareData && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          data={shareData}
+          shareUrl={shareUrl}
+          shareTitle={shareTitle}
+          shareDesc={shareDesc}
+        />
       )}
     </div>
   );

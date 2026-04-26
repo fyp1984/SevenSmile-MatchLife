@@ -4,10 +4,13 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 
 const PORT = Number(process.env.PORT || 18765);
+const HOST = process.env.WECHAT_OAUTH_HOST || '127.0.0.1';
 const APP_ORIGIN = process.env.APP_ORIGIN || 'https://tools.cheersai.cloud';
 const APP_BASE_PATH = normalizeBasePath(process.env.APP_BASE_PATH || '/7smile-matchlife');
 const LEGACY_API_BASE_PATH = '/api/wechat';
 const API_BASE_PATH = `${APP_BASE_PATH || ''}/api/wechat`;
+const LOCAL_API_BASE_PATH = `${APP_BASE_PATH || ''}/api`;
+const LEGACY_LOCAL_API_BASE_PATH = '/api';
 const ACCESS_COOKIE = 'matchlife_wechat_ok';
 const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
 const ACCESS_COOKIE_TTL = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
@@ -105,10 +108,22 @@ function isApiPath(pathname, suffix) {
   return pathname === `${API_BASE_PATH}${suffix}` || pathname === `${LEGACY_API_BASE_PATH}${suffix}`;
 }
 
+function isLocalApiPath(pathname, suffix) {
+  return pathname === `${LOCAL_API_BASE_PATH}${suffix}` || pathname === `${LEGACY_LOCAL_API_BASE_PATH}${suffix}`;
+}
+
 function sendJson(res, statusCode, body) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
+}
+
+async function getServiceSupabase() {
+  const url = String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!url || !serviceRoleKey) return null;
+  const mod = await import('./lib/ymq-sync.mjs');
+  return mod.createSupabaseServiceClient({ url, serviceRoleKey });
 }
 
 function logLine(message) {
@@ -471,6 +486,30 @@ async function handleManualSync(req, res, url) {
   }
 }
 
+async function handleLocalHealth(_req, res) {
+  sendJson(res, 200, {
+    ok: true,
+    hasServiceRoleKey: Boolean(String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
+    hasSupabaseUrl: Boolean(String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim()),
+  });
+}
+
+async function handleLocalSync(req, res, url) {
+  req.headers['x-matchlife-sync'] = '1';
+  await handleManualSync(req, res, url);
+}
+
+async function handleLocalReset(_req, res) {
+  const supabase = await getServiceSupabase();
+  if (!supabase) {
+    sendJson(res, 500, { ok: false, error: 'Missing SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL' });
+    return;
+  }
+  const mod = await import('./lib/ymq-sync.mjs');
+  await mod.resetDb({ supabase });
+  sendJson(res, 200, { ok: true });
+}
+
 const server = http.createServer(async (req, res) => {
   const origin = APP_ORIGIN || 'https://tools.cheersai.cloud';
   const url = new URL(req.url || '/', origin);
@@ -482,6 +521,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (req.method === 'GET' && isLocalApiPath(url.pathname, '/health')) {
+      await handleLocalHealth(req, res);
+      return;
+    }
+
+    if (req.method === 'POST' && isLocalApiPath(url.pathname, '/sync')) {
+      await handleLocalSync(req, res, url);
+      return;
+    }
+
+    if (req.method === 'POST' && isLocalApiPath(url.pathname, '/reset')) {
+      await handleLocalReset(req, res);
+      return;
+    }
+
     if (req.method === 'GET' && isApiPath(url.pathname, '/oauth-start')) {
       await handleOauthStart(req, res, url);
       return;
@@ -535,8 +589,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  log(`wechat oauth server listening on 127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  log(`wechat oauth server listening on ${HOST}:${PORT}`);
 });
 
 process.on('SIGTERM', () => {

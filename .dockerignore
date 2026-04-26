@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.idea
+.vscode
+.trae
+tmp
+test-screenshots
+*.png
+*.log
+.env
+.env.*
+!.env.example

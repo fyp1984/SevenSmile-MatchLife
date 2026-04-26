@@ -5,13 +5,16 @@ import Home from './pages/Home';
 import AccessGate, { hasGateAccess } from './pages/AccessGate';
 
 const Stats = lazy(() => import('./pages/Stats'));
+const Leaderboard = lazy(() => import('./pages/Leaderboard'));
 const SyncStatus = lazy(() => import('./pages/SyncStatus'));
 const DataSources = lazy(() => import('./pages/DataSources'));
 const WechatGate = lazy(() => import('./pages/WechatGate'));
 const WechatComplete = lazy(() => import('./pages/WechatComplete'));
 const Follow = lazy(() => import('./pages/Follow'));
+const Guide = lazy(() => import('./pages/Guide'));
 const PlayerCareer = lazy(() => import('./pages/PlayerCareer').then(m => ({ default: m.PlayerCareer })));
 const MatchDetail = lazy(() => import('./pages/MatchDetail').then(m => ({ default: m.MatchDetail })));
+const MatchTagging = lazy(() => import('./pages/MatchTagging'));
 
 function GateProtectedRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -35,9 +38,13 @@ function App() {
           <Route path="/" element={<WechatProtectedLayout />}>
             <Route index element={<Home />} />
             <Route path="stats" element={<Stats />} />
+            <Route path="leaderboard" element={<Leaderboard />} />
             <Route path="player/:name" element={<PlayerCareer />} />
             <Route path="matches/:id" element={<MatchDetail />} />
+            <Route path="matches/:matchId/tagging" element={<MatchTagging />} />
             <Route path="sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
+            <Route path="data-sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
+            <Route path="guide" element={<Guide />} />
             <Route path="gate" element={<AccessGate />} />
             <Route path="gate/wechat" element={<WechatGate />} />
             <Route path="wechat/complete" element={<WechatComplete />} />
