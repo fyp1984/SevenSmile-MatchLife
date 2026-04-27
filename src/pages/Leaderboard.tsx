@@ -1,19 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSportTab, SPORTS } from '../components/SportTabBar';
 import { Medal, Trophy, Activity } from 'lucide-react';
 import { buildUnavailableDataMessage } from '../lib/dataSourceHints';
-import { listPlayerProfiles, type PlayerProfile } from '../lib/playerProfiles';
-import {
-  inferGenderBucket,
-  inferMatchMode,
-  inferSportType,
-  normalizeParticipantName,
-  resolveWinnerSide,
-  type GenderBucket,
-  type MatchMode,
-} from '../lib/matchResults';
 
 type PlayerRanking = {
   rank: number;
@@ -26,30 +16,23 @@ type PlayerRanking = {
   last_active: string;
 };
 
-type RankingMatch = {
-  players_a: string[];
-  players_b: string[];
-  winner_side: 'A' | 'B' | 'UNKNOWN';
-  score_text: string | null;
-  event_key: string | null;
-  category: string | null;
-  tournament_name: string | null;
-  source: string | null;
-  start_time: string | null;
-  source_updated_at: string | null;
+type GenderFilter = 'all' | 'male' | 'female' | 'mixed';
+type ModeFilter = 'all' | 'singles' | 'doubles';
+type RankingFilters = {
+  sport: string;
+  gender: GenderFilter;
+  mode: ModeFilter;
 };
 
-type GenderFilter = 'all' | Exclude<GenderBucket, 'mixed' | 'unknown'>;
-type ModeFilter = 'all' | Extract<MatchMode, 'singles' | 'doubles'>;
-
 const GENDER_OPTIONS: Array<{ key: GenderFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'male', label: '男' },
-  { key: 'female', label: '女' },
+  { key: 'all', label: '全部性别' },
+  { key: 'male', label: '男子' },
+  { key: 'female', label: '女子' },
+  { key: 'mixed', label: '混合' },
 ];
 
 const MODE_OPTIONS: Array<{ key: ModeFilter; label: string }> = [
-  { key: 'all', label: '全部项目' },
+  { key: 'all', label: '全部形式' },
   { key: 'singles', label: '单打' },
   { key: 'doubles', label: '双打' },
 ];
@@ -61,11 +44,6 @@ function getErrorMessage(error: unknown) {
     return String(record.message || record.details || record.hint || record.error_description || JSON.stringify(error));
   }
   return String(error || '');
-}
-
-function isMissingFilteredRankingRpc(error: unknown) {
-  const message = getErrorMessage(error);
-  return /matchlife_get_filtered_player_rankings/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
 }
 
 function mapRankingRow(row: Record<string, unknown>): PlayerRanking {
@@ -81,85 +59,6 @@ function mapRankingRow(row: Record<string, unknown>): PlayerRanking {
   };
 }
 
-async function buildFallbackRankings(activeSport: string, activeGender: GenderFilter, activeMode: ModeFilter) {
-  const BATCH_SIZE = 500;
-  const collected: RankingMatch[] = [];
-  const profiles = await listPlayerProfiles('', activeSport, 500);
-  const profilesByName = profiles.reduce<Record<string, PlayerProfile>>((acc, profile) => {
-    acc[normalizeParticipantName(profile.player_name)] = profile;
-    return acc;
-  }, {});
-
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from('matches')
-      .select('players_a,players_b,winner_side,score_text,event_key,category,tournament_name,source,start_time,source_updated_at')
-      .range(from, from + BATCH_SIZE - 1);
-
-    if (error) throw error;
-    const batch = ((data || []) as RankingMatch[]).filter((match) => inferSportType(match) === activeSport);
-    collected.push(...batch);
-    if (batch.length < BATCH_SIZE) break;
-    from += BATCH_SIZE;
-  }
-
-  const aggregates = new Map<string, PlayerRanking>();
-  for (const match of collected) {
-    const resolvedWinner = resolveWinnerSide(match);
-    if (resolvedWinner === 'UNKNOWN') continue;
-    const mode = inferMatchMode(match);
-    if (activeMode !== 'all' && mode !== activeMode) continue;
-    const lastActive = match.start_time || match.source_updated_at || new Date(0).toISOString();
-
-    const consumeSide = (team: string[], side: 'A' | 'B') => {
-      for (const playerName of team) {
-        const normalized = normalizeParticipantName(playerName);
-        const profile = profilesByName[normalized];
-        const gender = inferGenderBucket(match, profile?.gender);
-        if (activeGender !== 'all' && gender !== activeGender) continue;
-        const key = `${activeSport}:${normalized}:${activeGender}:${activeMode}`;
-        const prev = aggregates.get(key);
-        const won = resolvedWinner === side ? 1 : 0;
-        if (!prev) {
-          aggregates.set(key, {
-            rank: 0,
-            player_id: key,
-            player_name: playerName,
-            avatar_url: profile?.avatar_url || null,
-            total_matches: 1,
-            wins: won,
-            win_rate: 0,
-            last_active: lastActive,
-          });
-          continue;
-        }
-        prev.total_matches += 1;
-        prev.wins += won;
-        if (Date.parse(lastActive) > Date.parse(prev.last_active)) prev.last_active = lastActive;
-        if (!prev.avatar_url && profile?.avatar_url) prev.avatar_url = profile.avatar_url;
-      }
-    };
-
-    consumeSide(match.players_a || [], 'A');
-    consumeSide(match.players_b || [], 'B');
-  }
-
-  return Array.from(aggregates.values())
-    .map((player) => ({
-      ...player,
-      win_rate: player.total_matches > 0 ? Number(((player.wins / player.total_matches) * 100).toFixed(1)) : 0,
-    }))
-    .sort((a, b) => {
-      if (b.win_rate !== a.win_rate) return b.win_rate - a.win_rate;
-      if (b.wins !== a.wins) return b.wins - a.wins;
-      if (b.total_matches !== a.total_matches) return b.total_matches - a.total_matches;
-      if (b.last_active !== a.last_active) return Date.parse(b.last_active) - Date.parse(a.last_active);
-      return a.player_name.localeCompare(b.player_name, 'zh-CN');
-    })
-    .map((player, index) => ({ ...player, rank: index + 1 }));
-}
-
 export default function Leaderboard() {
   const { activeSport, setActiveSport } = useSportTab();
   const [rankings, setRankings] = useState<PlayerRanking[]>([]);
@@ -167,35 +66,52 @@ export default function Leaderboard() {
   const [error, setError] = useState<string | null>(null);
   const [activeGender, setActiveGender] = useState<GenderFilter>('all');
   const [activeMode, setActiveMode] = useState<ModeFilter>('all');
+  const [submittedFilters, setSubmittedFilters] = useState<RankingFilters | null>(null);
+  const cacheRef = useRef(new Map<string, PlayerRanking[]>());
+  const hasSearched = submittedFilters !== null;
+  const filtersDirty =
+    !submittedFilters ||
+    submittedFilters.sport !== activeSport ||
+    submittedFilters.gender !== activeGender ||
+    submittedFilters.mode !== activeMode;
 
   useEffect(() => {
-    setActiveGender('all');
-    setActiveMode('all');
-  }, [activeSport]);
+    if (!submittedFilters) {
+      setLoading(false);
+      return;
+    }
 
-  useEffect(() => {
     let cancelled = false;
+    const cacheKey = [submittedFilters.sport, submittedFilters.gender, submittedFilters.mode].join(':');
     void (async () => {
+      const cached = cacheRef.current.get(cacheKey);
+      if (cached) {
+        setRankings(cached);
+        setError(null);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       setError(null);
+      setRankings([]);
       try {
         const rpc = await supabase.rpc('matchlife_get_filtered_player_rankings', {
-          p_sport_type: activeSport,
-          p_gender: activeGender,
-          p_mode: activeMode,
+          p_sport_type: submittedFilters.sport,
+          p_gender: submittedFilters.gender,
+          p_mode: submittedFilters.mode,
           p_limit: 300,
           p_offset: 0,
         });
 
         if (rpc.error) {
-          if (!isMissingFilteredRankingRpc(rpc.error)) throw rpc.error;
-          const fallback = await buildFallbackRankings(activeSport, activeGender, activeMode);
-          if (!cancelled) setRankings(fallback);
-          return;
+          throw rpc.error;
         }
 
         if (!cancelled) {
-          setRankings(((rpc.data || []) as Array<Record<string, unknown>>).map(mapRankingRow));
+          const nextRankings = ((rpc.data || []) as Array<Record<string, unknown>>).map(mapRankingRow);
+          cacheRef.current.set(cacheKey, nextRankings);
+          setRankings(nextRankings);
         }
       } catch (err) {
         if (!cancelled) setError(getErrorMessage(err));
@@ -206,8 +122,17 @@ export default function Leaderboard() {
 
     return () => {
       cancelled = true;
+      setLoading(false);
     };
-  }, [activeGender, activeMode, activeSport]);
+  }, [submittedFilters]);
+
+  const runSearch = () => {
+    setSubmittedFilters({
+      sport: activeSport,
+      gender: activeGender,
+      mode: activeMode,
+    });
+  };
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -227,7 +152,7 @@ export default function Leaderboard() {
       <div className="w-full mb-8">
         <h1 className="mb-2 text-2xl font-extrabold text-brand-brown sm:text-3xl">选手排行榜</h1>
         <p className="text-sm text-brand-gray sm:text-base">
-          基于系统内全部历史比赛数据生成，可按男、女、单打、双打等维度查看当前运动项目的排名表现。
+          请选择运动项目、性别与单打/双打条件后，再手动检索排行榜，以降低初始化数据库负载。
         </p>
       </div>
 
@@ -276,7 +201,7 @@ export default function Leaderboard() {
           </div>
         </div>
         <div>
-          <div className="mb-2 text-sm font-bold text-brand-brown">项目筛选</div>
+          <div className="mb-2 text-sm font-bold text-brand-brown">比赛形式</div>
           <div className="flex flex-wrap gap-2">
             {MODE_OPTIONS.map((option) => (
               <button
@@ -296,27 +221,54 @@ export default function Leaderboard() {
         </div>
       </div>
 
+      <div className="mb-6 flex w-full flex-col gap-3 rounded-3xl border border-orange-100 bg-white/80 p-5 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-sm text-brand-gray">
+          {hasSearched && !filtersDirty
+            ? '当前结果已与所选筛选条件同步。'
+            : '调整筛选条件后，点击“开始检索”再加载排行榜。'}
+        </div>
+        <button
+          type="button"
+          onClick={runSearch}
+          className="inline-flex h-11 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-6 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400"
+        >
+          {hasSearched ? '更新排行榜' : '开始检索'}
+        </button>
+      </div>
+
       {error && (
         <div className="w-full mb-6 bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-3xl text-sm font-medium">
           {error}
         </div>
       )}
 
-      {rankings.length === 0 && !loading ? (
+      {!hasSearched ? (
+        <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
+          <Trophy className="mx-auto mb-4 h-16 w-16 text-orange-200" />
+          <h3 className="mb-2 text-xl font-bold text-brand-brown">尚未开始检索</h3>
+          <p className="text-sm text-brand-gray">请先选择筛选条件，再点击“开始检索”加载排行榜。</p>
+        </div>
+      ) : loading && rankings.length === 0 ? (
+        <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
+          <Activity className="w-12 h-12 text-orange-400 mx-auto mb-4 animate-pulse" />
+          <h3 className="text-xl font-bold text-brand-brown mb-2">正在获取数据...</h3>
+          <p className="text-brand-gray text-sm">稍等片刻，排行榜正在路上</p>
+        </div>
+      ) : rankings.length === 0 ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Trophy className="w-16 h-16 text-orange-200 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-brand-brown mb-2">暂无排行榜数据</h3>
-          <p className="text-brand-gray text-sm">{buildUnavailableDataMessage(activeSport)}</p>
+          <p className="text-brand-gray text-sm">{buildUnavailableDataMessage(submittedFilters?.sport || activeSport)}</p>
         </div>
       ) : (
         <div className="w-full bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-orange-50 overflow-hidden">
           <div className="px-6 py-5 border-b border-orange-100 bg-orange-50/40">
             <h3 className="text-xl font-bold text-brand-brown flex items-center gap-2">
               <Medal className="w-5 h-5 text-orange-500" />
-              {SPORTS.find((sport) => sport.key === activeSport)?.label}排行榜
+              {SPORTS.find((sport) => sport.key === (submittedFilters?.sport || activeSport))?.label}排行榜
             </h3>
             <p className="mt-2 text-sm text-brand-gray">
-              当前维度：{GENDER_OPTIONS.find((item) => item.key === activeGender)?.label} · {MODE_OPTIONS.find((item) => item.key === activeMode)?.label}
+              当前维度：{GENDER_OPTIONS.find((item) => item.key === (submittedFilters?.gender || activeGender))?.label} · {MODE_OPTIONS.find((item) => item.key === (submittedFilters?.mode || activeMode))?.label}
             </p>
           </div>
 

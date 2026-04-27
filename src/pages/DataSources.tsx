@@ -60,14 +60,16 @@ const PLAYER_PROFILE_JSON_EXAMPLE = `{
   ]
 }`;
 
-const DATA_SOURCE_PASSWORD = import.meta.env.VITE_DATA_SOURCE_PASSWORD || '7smile-source-temp';
+const DATA_SOURCE_PASSWORD = import.meta.env.VITE_DATA_SOURCE_PASSWORD || '7%K$QJ2pWtgw';
 
 type DataSourceTab = 'sources' | 'players' | 'formats';
+type PlayerActionModalState =
+  | { mode: 'edit'; profile: PlayerProfile }
+  | { mode: 'delete'; profile: PlayerProfile }
+  | null;
 
-function verifyDataSourcePassword(actionLabel: string) {
-  const password = window.prompt(`当前为临时保护措施，请输入“数据源密码”后再${actionLabel}。`);
-  if (password === null) return false;
-  return password.trim() === DATA_SOURCE_PASSWORD;
+function getPasswordVerificationMessage(valid: boolean, actionLabel: string) {
+  return valid ? '' : `数据源密码不正确，已取消${actionLabel}。`;
 }
 
 function normalizeImportedSources(payload: unknown): SourceItem[] {
@@ -187,6 +189,10 @@ export default function DataSources() {
   const [activeTab, setActiveTab] = useState<DataSourceTab>('sources');
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editPasswordVerified, setEditPasswordVerified] = useState(false);
+  const [playerActionModal, setPlayerActionModal] = useState<PlayerActionModalState>(null);
+  const [playerActionPassword, setPlayerActionPassword] = useState('');
+  const [playerActionPending, setPlayerActionPending] = useState(false);
+  const [playerActionError, setPlayerActionError] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -328,15 +334,13 @@ export default function DataSources() {
     }
 
     if (editingPlayerId && !editPasswordVerified) {
-      if (!verifyDataSourcePassword('更新选手档案')) {
-        setPlayerError('数据源密码不正确，已取消更新。');
-        return;
-      }
-      setEditPasswordVerified(true);
+      setPlayerError('请先点击对应选手的编辑按钮，并在密码确认弹层中完成验证后再保存。');
+      return;
     }
 
     try {
       const profile = await upsertPlayerProfile({
+        playerId: editingPlayerId,
         playerName: playerName.trim(),
         primarySport: playerSport,
         affiliatedClub: playerClub,
@@ -371,12 +375,7 @@ export default function DataSources() {
     }
   };
 
-  const handleEditPlayer = (profile: PlayerProfile) => {
-    if (!verifyDataSourcePassword('编辑选手档案')) {
-      setPlayerError('数据源密码不正确，已取消编辑。');
-      return;
-    }
-
+  const beginEditPlayer = (profile: PlayerProfile) => {
     setEditPasswordVerified(true);
     setEditingPlayerId(profile.id);
     setPlayerName(profile.player_name);
@@ -392,22 +391,61 @@ export default function DataSources() {
     setPlayerMessage('已将选手信息填入表单，可直接修改并保存。');
   };
 
-  const handleDeletePlayer = async (id: string, name: string) => {
-    if (!window.confirm(`确定要删除选手 "${name}" 吗？这可能导致前台无法显示其相关档案信息。`)) return;
+  const openPlayerActionModal = (mode: 'edit' | 'delete', profile: PlayerProfile) => {
+    setPlayerError(null);
+    setPlayerActionPassword('');
+    setPlayerActionError(null);
+    setPlayerActionModal({ mode, profile });
+  };
 
-    if (!verifyDataSourcePassword('删除选手档案')) {
-      setPlayerError('数据源密码不正确，已取消删除。');
+  const closePlayerActionModal = () => {
+    if (playerActionPending) return;
+    setPlayerActionModal(null);
+    setPlayerActionPassword('');
+    setPlayerActionError(null);
+  };
+
+  const confirmPlayerAction = async () => {
+    if (!playerActionModal) return;
+    const actionLabel = playerActionModal.mode === 'edit' ? '编辑' : '删除';
+    const trimmedPassword = playerActionPassword.trim();
+    if (!trimmedPassword) {
+      setPlayerActionError('请输入数据源密码。');
       return;
     }
 
+    const isValidPassword = trimmedPassword === DATA_SOURCE_PASSWORD;
+    if (!isValidPassword) {
+      const message = getPasswordVerificationMessage(false, actionLabel);
+      setPlayerActionError(message);
+      setPlayerError(message);
+      return;
+    }
+
+    setPlayerActionError(null);
+    setPlayerActionPending(true);
     try {
-      await deletePlayerProfile(id);
-      if (editingPlayerId === id) setEditingPlayerId(null);
-      if (editingPlayerId === id) setEditPasswordVerified(false);
-      setPlayerProfiles((current) => current.filter(p => p.id !== id));
-      setPlayerMessage(`已成功删除选手档案。`);
+      if (playerActionModal.mode === 'edit') {
+        beginEditPlayer(playerActionModal.profile);
+      } else {
+        const deleted = await deletePlayerProfile(playerActionModal.profile.id);
+        if (!deleted) {
+          throw new Error('未能删除该选手档案，请检查权限状态或该档案是否仍被比赛标签引用。');
+        }
+        if (editingPlayerId === playerActionModal.profile.id) setEditingPlayerId(null);
+        if (editingPlayerId === playerActionModal.profile.id) setEditPasswordVerified(false);
+        setPlayerProfiles((current) => current.filter((p) => p.id !== playerActionModal.profile.id));
+        setPlayerMessage(`已成功删除选手档案。`);
+      }
+      setPlayerActionModal(null);
+      setPlayerActionPassword('');
+      setPlayerActionError(null);
     } catch (e) {
-      setPlayerError(`删除选手档案失败：${getErrorMessage(e)}`);
+      const message = `${playerActionModal.mode === 'edit' ? '编辑选手档案' : '删除选手档案'}失败：${getErrorMessage(e)}`;
+      setPlayerActionError(message);
+      setPlayerError(message);
+    } finally {
+      setPlayerActionPending(false);
     }
   };
 
@@ -832,9 +870,6 @@ export default function DataSources() {
               当前活跃档案 <span className="font-extrabold text-brand-brown">{activePlayers}</span> 条
             </div>
           </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
-            临时保护：编辑或删除选手档案时需要输入“数据源密码”，当前默认值为 <code className="rounded bg-white px-1.5 py-0.5">7smile-source-temp</code>。后续会替换为正式 SSO 权限控制。
-          </div>
           {playerMessage && <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{playerMessage}</div>}
           {playerError && <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{playerError}</div>}
         </section>
@@ -903,10 +938,10 @@ export default function DataSources() {
                           {profile.primary_sport} · {profile.affiliated_club || '未填写机构'} · {profile.coach_name || '未填写教练'}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
-                          onClick={() => handleEditPlayer(profile)}
+                          onClick={() => openPlayerActionModal('edit', profile)}
                           className="p-1.5 text-brand-gray hover:text-orange-500 hover:bg-orange-50 rounded-full transition-colors"
                           title="编辑档案"
                         >
@@ -914,7 +949,7 @@ export default function DataSources() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeletePlayer(profile.id, profile.player_name)}
+                          onClick={() => openPlayerActionModal('delete', profile)}
                           className="p-1.5 text-brand-gray hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
                           title="删除档案"
                         >
@@ -992,6 +1027,70 @@ export default function DataSources() {
           </div>
         </div>
       </section>
+      )}
+
+      {playerActionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-brown/35 px-4">
+          <div className="w-full max-w-md rounded-[28px] border border-orange-100 bg-white p-6 shadow-xl">
+            <h3 className="text-xl font-extrabold text-brand-brown">
+              {playerActionModal.mode === 'edit' ? '确认编辑选手档案' : '确认删除选手档案'}
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-brand-gray">
+              {playerActionModal.mode === 'edit'
+                ? `即将编辑选手“${playerActionModal.profile.player_name}”，请输入数据源密码后继续。`
+                : `即将删除选手“${playerActionModal.profile.player_name}”。该操作会影响前台档案展示，请输入数据源密码确认。`}
+            </p>
+            <label className="mt-5 block">
+              <span className="mb-2 block text-sm font-bold text-brand-brown">数据源密码</span>
+              <input
+                type="password"
+                value={playerActionPassword}
+                onChange={(e) => {
+                  setPlayerActionPassword(e.target.value);
+                  if (playerActionError) setPlayerActionError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void confirmPlayerAction();
+                  }
+                }}
+                placeholder="请输入数据源密码"
+                className={`w-full rounded-2xl bg-white px-4 py-3 text-sm text-brand-brown outline-none transition ${
+                  playerActionError
+                    ? 'border border-red-300 focus:border-red-400'
+                    : 'border border-orange-100 focus:border-orange-300'
+                }`}
+              />
+            </label>
+            {playerActionError && (
+              <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {playerActionError}
+              </div>
+            )}
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={closePlayerActionModal}
+                className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-orange-200 bg-white px-4 text-sm font-bold text-orange-700 transition hover:bg-orange-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmPlayerAction()}
+                disabled={playerActionPending || playerActionPassword.trim().length === 0}
+                className={`inline-flex h-11 flex-1 items-center justify-center rounded-full px-4 text-sm font-bold text-white shadow-md transition ${
+                  playerActionModal.mode === 'delete'
+                    ? 'bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-400 hover:to-orange-400'
+                    : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400'
+                } disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                {playerActionPending ? '处理中...' : playerActionModal.mode === 'edit' ? '确认编辑' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

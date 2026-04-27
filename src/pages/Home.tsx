@@ -77,24 +77,6 @@ function isMissingSuggestionRpcError(error: unknown) {
   return /matchlife_search_suggestions/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
 }
 
-function matchContainsKeyword(match: MatchRow, keyword: string) {
-  const normalizedKeyword = keyword.trim().toLowerCase();
-  if (!normalizedKeyword) return true;
-  return [
-    match.tournament_name,
-    match.event_key,
-    match.round_name,
-    match.match_time_name,
-    match.category,
-    match.city,
-    match.location,
-    ...(match.players_a || []),
-    ...(match.players_b || []),
-  ]
-    .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(normalizedKeyword));
-}
-
 function createLRUCache<K, V>(maxSize: number) {
   const cache = new Map<K, V>();
   return {
@@ -324,45 +306,30 @@ export default function Home() {
     } else {
       setLoading(true);
     }
-    const request = supabase
-      .from('matches')
-      .select(MATCH_SELECT)
-      .order('start_time', { ascending: false, nullsFirst: false })
-      .order('source_updated_at', { ascending: false, nullsFirst: false })
-      .limit(5);
-    const { data, error } = await Promise.race([
-      request,
-      new Promise<{ data: null; error: Error }>((resolve) => {
-        window.setTimeout(() => resolve({ data: null, error: new Error('查询超时，请稍后重试。') }), 30_000);
-      }),
-    ]);
+    try {
+      const rpc = await supabase.rpc('matchlife_search_matches', {
+        p_keyword: null,
+        p_date_from: null,
+        p_date_to: null,
+        p_category_filter: null,
+        p_tournament_filter: null,
+        p_limit: 5,
+      });
 
-    if (error) setErrorMsg(error.message);
-    if (data) applyMatches(data as MatchRow[]);
-    if (options?.silent) {
-      setRefreshing(false);
-    } else {
-      setLoading(false);
+      if (!rpc.error) {
+        applyMatches((rpc.data || []) as MatchRow[]);
+      } else {
+        if (!isMissingSearchRpcError(rpc.error)) {
+          setErrorMsg(getErrorMessage(rpc.error));
+        }
+      }
+    } finally {
+      if (options?.silent) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
-  };
-
-  const createFilteredMatchRequest = () => {
-    let request = supabase.from('matches').select(MATCH_SELECT);
-
-    if (dateFrom) {
-      request = request.gte('start_time', dateFrom);
-    }
-    if (dateTo) {
-      request = request.lte('start_time', dateTo);
-    }
-    if (categoryFilter) {
-      request = request.ilike('category', `%${categoryFilter}%`);
-    }
-    if (tournamentFilter) {
-      request = request.ilike('tournament_name', `%${tournamentFilter}%`);
-    }
-
-    return request;
   };
 
   const handleSearch = async (
@@ -413,31 +380,13 @@ export default function Home() {
 
       if (!rpc.error) {
         const rows = (rpc.data || []) as MatchRow[];
-        applyMatches(rows);
         searchCacheRef.current.set(cacheKey, rows);
-        return;
+        applyMatches(rows);
+      } else {
+        if (!isMissingSearchRpcError(rpc.error)) {
+          setErrorMsg(getErrorMessage(rpc.error));
+        }
       }
-
-      if (!isMissingSearchRpcError(rpc.error) && !isMissingPlayersTextError(rpc.error)) {
-        setErrorMsg(getErrorMessage(rpc.error));
-        return;
-      }
-
-      const fallback = await createFilteredMatchRequest()
-        .order('start_time', { ascending: false, nullsFirst: false })
-        .order('source_updated_at', { ascending: false, nullsFirst: false })
-        .limit(FALLBACK_SEARCH_LIMIT);
-
-      if (fallback.error) {
-        setErrorMsg(getErrorMessage(fallback.error));
-        return;
-      }
-
-      const fallbackRows = ((fallback.data || []) as MatchRow[])
-        .filter((match) => matchContainsKeyword(match, keyword))
-        .slice(0, 20);
-      applyMatches(fallbackRows);
-      searchCacheRef.current.set(cacheKey, fallbackRows);
     } finally {
       inFlightRef.current = false;
       if (options?.silent) {
@@ -479,62 +428,7 @@ export default function Home() {
       ).slice(0, 8);
       setSuggestions(results);
       setShowSuggestions(results.length > 0);
-      return;
     }
-
-    if (!isMissingSuggestionRpcError(rpc.error)) {
-      return;
-    }
-
-    const escaped = keyword.replace(/[%_,]/g, (m) => `\\${m}`);
-    const { data, error } = await supabase
-      .from('matches')
-      .select('players_text, tournament_name')
-      .or(`players_text.ilike.%${escaped}%,tournament_name.ilike.%${escaped}%`)
-      .limit(10);
-
-    let rows = (data || []) as SuggestionRow[];
-    if (error && isMissingPlayersTextError(error)) {
-      const fallback = await supabase
-        .from('matches')
-        .select('players_a, players_b, tournament_name')
-        .order('start_time', { ascending: false, nullsFirst: false })
-        .limit(30);
-      if (fallback.error) return;
-      rows = (fallback.data || []) as SuggestionRow[];
-    }
-
-    if (!rows.length) return;
-    const seen = new Set<string>();
-    const results: string[] = [];
-    for (const row of rows) {
-      if (row.tournament_name && row.tournament_name.toLowerCase().includes(keyword.toLowerCase())) {
-        if (!seen.has(row.tournament_name)) {
-          seen.add(row.tournament_name);
-          results.push(row.tournament_name);
-        }
-      }
-      if (row.players_text) {
-        const parts = row.players_text.split(/\s+vs\s+/i);
-        for (const part of parts) {
-          const trimmed = part.trim();
-          if (trimmed && trimmed.toLowerCase().includes(keyword.toLowerCase()) && !seen.has(trimmed)) {
-            seen.add(trimmed);
-            results.push(trimmed);
-          }
-        }
-      }
-      for (const player of [...(row.players_a || []), ...(row.players_b || [])]) {
-        const trimmed = String(player || '').trim();
-        if (trimmed && trimmed.toLowerCase().includes(keyword.toLowerCase()) && !seen.has(trimmed)) {
-          seen.add(trimmed);
-          results.push(trimmed);
-        }
-      }
-      if (results.length >= 8) break;
-    }
-    setSuggestions(results.slice(0, 8));
-    setShowSuggestions(results.length > 0);
   };
 
   const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

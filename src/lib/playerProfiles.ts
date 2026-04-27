@@ -15,6 +15,17 @@ export type PlayerProfile = {
   updated_at: string;
 };
 
+function isMissingPlayerIdRpcSignature(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { code?: string; message?: string; details?: string; hint?: string };
+  const haystack = [record.message, record.details, record.hint].filter(Boolean).join(' ');
+  return (
+    record.code === 'PGRST202' &&
+    haystack.includes('matchlife_upsert_player_profile') &&
+    haystack.includes('p_player_id')
+  );
+}
+
 export async function listPlayerProfiles(search = '', primarySport = '', limit = 100) {
   const rpc = await supabase.rpc('matchlife_list_player_profiles', {
     p_limit: limit,
@@ -46,6 +57,7 @@ export async function listPlayerProfiles(search = '', primarySport = '', limit =
 }
 
 export async function upsertPlayerProfile(payload: {
+  playerId?: string | null;
   playerName: string;
   primarySport: string;
   avatarUrl?: string;
@@ -55,7 +67,8 @@ export async function upsertPlayerProfile(payload: {
   coachName?: string;
   status?: string;
 }) {
-  const { data, error } = await supabase.rpc('matchlife_upsert_player_profile', {
+  const nextPayload = {
+    p_player_id: payload.playerId ?? null,
     p_player_name: payload.playerName,
     p_primary_sport: payload.primarySport,
     p_avatar_url: payload.avatarUrl ?? null,
@@ -64,7 +77,26 @@ export async function upsertPlayerProfile(payload: {
     p_affiliated_club: payload.affiliatedClub ?? null,
     p_coach_name: payload.coachName ?? null,
     p_status: payload.status ?? 'active',
-  });
+  };
+
+  const { data, error } = await supabase.rpc('matchlife_upsert_player_profile', nextPayload);
+
+  if (error && isMissingPlayerIdRpcSignature(error)) {
+    // Backward-compatible retry for environments whose PostgREST cache still exposes the old 8-arg signature.
+    const legacy = await supabase.rpc('matchlife_upsert_player_profile', {
+      p_player_name: payload.playerName,
+      p_primary_sport: payload.primarySport,
+      p_avatar_url: payload.avatarUrl ?? null,
+      p_gender: payload.gender ?? null,
+      p_dominant_hand: payload.dominantHand ?? null,
+      p_affiliated_club: payload.affiliatedClub ?? null,
+      p_coach_name: payload.coachName ?? null,
+      p_status: payload.status ?? 'active',
+    });
+
+    if (legacy.error) throw legacy.error;
+    return ((legacy.data || [])[0] || null) as PlayerProfile | null;
+  }
 
   if (error) throw error;
   return ((data || [])[0] || null) as PlayerProfile | null;
