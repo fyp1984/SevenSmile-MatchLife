@@ -21,7 +21,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   
   const appBasePath = process.env.APP_BASE_PATH?.trim() || env.APP_BASE_PATH?.trim();
-  const isProdBuild = process.env.NODE_ENV === 'production' || env.NODE_ENV === 'production';
+  // fallback logic: if running `vite build`, mode is 'production' by default
+  const isProdBuild = mode === 'production' || process.env.NODE_ENV === 'production' || env.NODE_ENV === 'production';
   const enableTraeBadge = process.env.TRAE_BADGE_ENABLE === 'true' || env.TRAE_BADGE_ENABLE === 'true';
   const supabaseProxyTarget = process.env.SUPABASE_REST_UPSTREAM?.trim() || env.SUPABASE_REST_UPSTREAM?.trim() || 'http://175.178.236.183:8000';
   

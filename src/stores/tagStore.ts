@@ -10,7 +10,13 @@ type TagStore = {
   availableTags: TechniqueTag[];
   userReputation: UserReputation | null;
   loading: boolean;
+  loadingAvailableTags: boolean;
+  loadingMatchTags: boolean;
+  loadingUserReputation: boolean;
   error: string | null;
+  availableTagsError: string | null;
+  matchTagsError: string | null;
+  userReputationError: string | null;
 
   setMode: (mode: TaggingMode) => void;
   setCurrentMatch: (matchId: string) => void;
@@ -28,6 +34,26 @@ type TagStore = {
   clearTags: () => void;
 };
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message || fallback;
+  if (error && typeof error === 'object') {
+    const record = error as { message?: string; details?: string; hint?: string; error_description?: string };
+    return String(record.message || record.details || record.hint || record.error_description || fallback);
+  }
+  return String(error || fallback);
+}
+
+function dedupeTechniqueTags(tags: TechniqueTag[]) {
+  const uniqueMap = new Map<string, TechniqueTag>();
+  for (const tag of tags) {
+    const key = `${tag.sport}:${tag.tag_category}:${tag.tag_name.trim().toLowerCase()}`;
+    if (!uniqueMap.has(key)) {
+      uniqueMap.set(key, tag);
+    }
+  }
+  return Array.from(uniqueMap.values());
+}
+
 export const useTagStore = create<TagStore>((set, get) => ({
   mode: 'realtime',
   currentMatchId: null,
@@ -35,47 +61,62 @@ export const useTagStore = create<TagStore>((set, get) => ({
   availableTags: [],
   userReputation: null,
   loading: false,
+  loadingAvailableTags: false,
+  loadingMatchTags: false,
+  loadingUserReputation: false,
   error: null,
+  availableTagsError: null,
+  matchTagsError: null,
+  userReputationError: null,
 
   setMode: (mode) => set({ mode }),
 
   setCurrentMatch: (matchId) => set({ currentMatchId: matchId }),
 
   loadAvailableTags: async (sport) => {
-    set({ loading: true, error: null });
+    set({ loadingAvailableTags: true, availableTagsError: null });
     try {
       const { data, error } = await supabase
         .from('technique_tags')
         .select('id, sport:sport_type, tag_name, tag_category, description:tag_description, created_at')
         .eq('sport_type', sport)
         .eq('is_active', true)
-        .order('tag_category', { ascending: true });
+        .order('tag_category', { ascending: true })
+        .order('sort_order', { ascending: true })
+        .order('tag_name', { ascending: true });
 
       if (error) throw error;
-      set({ availableTags: data || [], loading: false });
+      set({ availableTags: dedupeTechniqueTags((data || []) as TechniqueTag[]), loadingAvailableTags: false });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '加载标签失败';
-      set({ error: msg, loading: false });
+      set({
+        availableTagsError: getErrorMessage(error, '加载可选标签失败'),
+        loadingAvailableTags: false,
+      });
     }
   },
 
   loadUserReputation: async (userId) => {
-    set({ loading: true, error: null });
+    set({ loadingUserReputation: true, userReputationError: null });
     try {
       const { data, error } = await supabase.rpc('matchlife_get_user_reputation', {
         p_user_id: userId,
       });
 
       if (error) throw error;
-      set({ userReputation: (data?.[0] as UserReputation | undefined) || null, loading: false });
+      set({
+        userReputation: (data?.[0] as UserReputation | undefined) || null,
+        loadingUserReputation: false,
+      });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '加载用户信誉失败';
-      set({ error: msg, loading: false });
+      set({
+        userReputationError: getErrorMessage(error, '加载用户信誉失败'),
+        loadingUserReputation: false,
+      });
     }
   },
 
   loadMatchTags: async (matchId) => {
-    set({ loading: true, error: null });
+    set({ loadingMatchTags: true, matchTagsError: null });
     try {
       const { data, error } = await supabase.rpc('matchlife_list_match_tags', {
         p_match_id: matchId,
@@ -94,10 +135,12 @@ export const useTagStore = create<TagStore>((set, get) => ({
         isVerified: Boolean(item.is_verified),
       }));
 
-      set({ tags, loading: false });
+      set({ tags, loadingMatchTags: false });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '加载标签失败';
-      set({ error: msg, loading: false });
+      set({
+        matchTagsError: getErrorMessage(error, '加载标签失败'),
+        loadingMatchTags: false,
+      });
     }
   },
 
@@ -208,5 +251,16 @@ export const useTagStore = create<TagStore>((set, get) => ({
     }
   },
 
-  clearTags: () => set({ tags: [], currentMatchId: null }),
+  clearTags: () =>
+    set({
+      tags: [],
+      currentMatchId: null,
+      error: null,
+      availableTagsError: null,
+      matchTagsError: null,
+      userReputationError: null,
+      loadingAvailableTags: false,
+      loadingMatchTags: false,
+      loadingUserReputation: false,
+    }),
 }));

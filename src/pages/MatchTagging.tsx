@@ -28,7 +28,13 @@ export default function MatchTagging() {
     availableTags,
     userReputation,
     loading,
+    loadingAvailableTags,
+    loadingMatchTags,
+    loadingUserReputation,
     error,
+    availableTagsError,
+    matchTagsError,
+    userReputationError,
     setMode,
     setCurrentMatch,
     loadAvailableTags,
@@ -47,6 +53,7 @@ export default function MatchTagging() {
   const [videoTimestamp, setVideoTimestamp] = useState<number | null>(null);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!matchId) return;
@@ -54,18 +61,17 @@ export default function MatchTagging() {
     let cancelled = false;
     clearTags();
     setInitializing(true);
+    setMatchError(null);
 
     const init = async () => {
       setCurrentMatch(matchId);
-      await Promise.allSettled([
-        loadMatchDetails(),
-        loadAvailableTags('badminton'),
-        loadMatchTags(matchId),
-        loadUserReputationData(),
-      ]);
-      if (!cancelled) {
-        setInitializing(false);
-      }
+      const matchLoaded = await loadMatchDetails();
+      if (!cancelled) setInitializing(false);
+      if (!matchLoaded || cancelled) return;
+
+      void loadAvailableTags('badminton');
+      void loadMatchTags(matchId);
+      void loadUserReputationData();
     };
 
     void init();
@@ -77,8 +83,17 @@ export default function MatchTagging() {
     };
   }, [matchId, clearTags, loadAvailableTags, loadMatchTags, loadUserReputation, setCurrentMatch]);
 
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Error) return error.message || fallback;
+    if (error && typeof error === 'object') {
+      const record = error as { message?: string; details?: string; hint?: string; error_description?: string };
+      return String(record.message || record.details || record.hint || record.error_description || fallback);
+    }
+    return String(error || fallback);
+  };
+
   const loadMatchDetails = async () => {
-    if (!matchId) return;
+    if (!matchId) return false;
     
     const { data, error } = await supabase
       .from('matches')
@@ -87,11 +102,12 @@ export default function MatchTagging() {
       .single();
 
     if (error) {
-      console.error('Failed to load match:', error);
-      return;
+      setMatchError(getErrorMessage(error, '加载比赛详情失败'));
+      return false;
     }
 
     setMatch(data);
+    return true;
   };
 
   const loadUserReputationData = async () => {
@@ -146,12 +162,29 @@ export default function MatchTagging() {
     return acc;
   }, {} as Record<string, typeof availableTags>);
 
-  if (initializing || !match) {
+  if (initializing) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center space-y-3">
           <Loader2 className="w-8 h-8 animate-spin text-orange-500 mx-auto" />
           <div className="text-sm font-medium text-brand-gray">正在加载比赛标签面板...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!match) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="w-full max-w-lg rounded-3xl border border-red-200 bg-red-50 px-6 py-8 text-center">
+          <div className="text-lg font-extrabold text-red-700">加载比赛失败</div>
+          <div className="mt-2 text-sm text-red-600">{matchError || '未找到对应比赛或比赛详情暂不可用。'}</div>
+          <button
+            onClick={() => navigate(-1)}
+            className="mt-5 inline-flex rounded-full bg-white px-5 py-2 text-sm font-bold text-red-700 shadow-sm"
+          >
+            返回上一页
+          </button>
         </div>
       </div>
     );
@@ -187,9 +220,9 @@ export default function MatchTagging() {
         </div>
       </div>
 
-      {error && (
+      {(error || availableTagsError || matchTagsError || userReputationError || matchError) && (
         <div className="w-full mb-6 bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-3xl text-sm font-medium">
-          {error}
+          {[matchError, availableTagsError, matchTagsError, userReputationError, error].filter(Boolean).join('；')}
         </div>
       )}
 
@@ -202,23 +235,23 @@ export default function MatchTagging() {
             <div>
               <div className="text-sm text-brand-gray">信誉等级</div>
               <div className="text-xl font-extrabold text-brand-brown">
-                {userReputation?.reputation_level || 'beginner'}
+                {loadingUserReputation ? '加载中...' : userReputation?.reputation_level || 'beginner'}
               </div>
             </div>
           </div>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-brand-gray">总标签数</span>
-              <span className="font-bold text-brand-brown">{userReputation?.total_tags || 0}</span>
+              <span className="font-bold text-brand-brown">{loadingUserReputation ? '...' : userReputation?.total_tags || 0}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-brand-gray">已验证</span>
-              <span className="font-bold text-green-600">{userReputation?.verified_tags || 0}</span>
+              <span className="font-bold text-green-600">{loadingUserReputation ? '...' : userReputation?.verified_tags || 0}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-brand-gray">准确率</span>
               <span className="font-bold text-orange-600">
-                {((userReputation?.accuracy_score || 0) * 100).toFixed(1)}%
+                {loadingUserReputation ? '...' : `${((userReputation?.accuracy_score || 0) * 100).toFixed(1)}%`}
               </span>
             </div>
           </div>
@@ -232,7 +265,7 @@ export default function MatchTagging() {
             <div>
               <div className="text-sm text-brand-gray">积分</div>
               <div className="text-xl font-extrabold text-brand-brown">
-                {userReputation?.total_points || 0}
+                {loadingUserReputation ? '...' : userReputation?.total_points || 0}
               </div>
             </div>
           </div>
@@ -316,7 +349,15 @@ export default function MatchTagging() {
                 )}
               </div>
               <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                {Object.entries(groupedTags).map(([category, categoryTags]) => (
+                {loadingAvailableTags ? (
+                  <div className="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-6 text-center text-sm text-brand-gray">
+                    正在加载可选标签...
+                  </div>
+                ) : Object.keys(groupedTags).length === 0 ? (
+                  <div className="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-6 text-center text-sm text-brand-gray">
+                    暂无可用标签
+                  </div>
+                ) : Object.entries(groupedTags).map(([category, categoryTags]) => (
                   <div key={category} className="space-y-1">
                     <div className="text-xs font-bold text-orange-600 px-2 py-1 bg-orange-50 rounded-lg">
                       {category}
@@ -397,7 +438,7 @@ export default function MatchTagging() {
           <div className="space-y-3 max-h-[600px] overflow-y-auto">
             {tags.length === 0 ? (
               <div className="text-center py-12 text-brand-gray">
-                暂无标签，开始录入吧
+                {loadingMatchTags ? '正在加载已录入标签...' : '暂无标签，开始录入吧'}
               </div>
             ) : (
               tags.map((tag) => (

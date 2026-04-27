@@ -26,22 +26,8 @@ function timeoutFetch(url: string, timeoutMs = 1800) {
 }
 
 async function fetchPublicIp() {
-  const endpoints = [
-    'https://api.ipify.org?format=json',
-    'https://api64.ipify.org?format=json',
-  ];
-
-  for (const endpoint of endpoints) {
-    try {
-      const res = await timeoutFetch(endpoint);
-      if (!res.ok) continue;
-      const json = (await res.json()) as { ip?: string };
-      if (json?.ip) return json.ip.trim();
-    } catch {
-      // Ignore and try the next endpoint.
-    }
-  }
-
+  // Due to frequent ERR_CONNECTION_REFUSED / ERR_BLOCKED_BY_CLIENT 
+  // from ad blockers for ipify.org, we return empty to rely on the fallback signature.
   return '';
 }
 

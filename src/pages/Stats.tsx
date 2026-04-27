@@ -5,15 +5,6 @@ import ShareModal from '../components/ShareModal';
 import type { StatsShareData } from '../lib/shareCard';
 import { DATA_SOURCE_CONTACT_HINT } from '../lib/dataSourceHints';
 
-type MatchLite = {
-  players_a: string[];
-  players_b: string[];
-  tournament_name: string;
-  category: string;
-  winner_side: 'A' | 'B' | 'UNKNOWN';
-  event_key: string | null;
-};
-
 type RecentTournamentRow = {
   tournament_name: string;
   latest_at: string;
@@ -53,103 +44,8 @@ function isMissingRecentTournamentsRpc(error: unknown) {
   return /matchlife_list_recent_tournaments/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
 }
 
-function isMissingTournamentStatsRpc(error: unknown) {
-  const message = getErrorMessage(error);
-  return /matchlife_get_tournament_stats/i.test(message) && /(schema cache|does not exist|Could not find the function)/i.test(message);
-}
-
 function normalizeEventLabel(eventKey: string) {
   return eventKey.replace(/^([0-9]{1,2})岁\1岁/, '$1岁');
-}
-
-function toTeamName(list: string[] | null | undefined) {
-  return (list || []).filter(Boolean).join(' / ').trim();
-}
-
-function buildStatsModel(rows: MatchLite[], tournamentName: string): StatsModel {
-  const playersSet = new Set<string>();
-  const tournamentsSet = new Set<string>();
-  const categoryCount: Record<string, number> = {};
-  const eventCount: Record<string, number> = {};
-  const eventFinishedCount: Record<string, number> = {};
-  const rankMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
-  let finishedMatches = 0;
-
-  for (const m of rows) {
-    for (const p of m.players_a || []) playersSet.add(p);
-    for (const p of m.players_b || []) playersSet.add(p);
-    if (m.tournament_name) tournamentsSet.add(m.tournament_name);
-
-    const category = m.category || '未识别组别';
-    categoryCount[category] = (categoryCount[category] || 0) + 1;
-
-    const eventKey = m.event_key || '未识别项目';
-    eventCount[eventKey] = (eventCount[eventKey] || 0) + 1;
-
-    const a = toTeamName(m.players_a);
-    const b = toTeamName(m.players_b);
-    if (!a || !b) continue;
-
-    if (m.winner_side === 'A' || m.winner_side === 'B') {
-      finishedMatches += 1;
-      eventFinishedCount[eventKey] = (eventFinishedCount[eventKey] || 0) + 1;
-      rankMap[eventKey] ||= {};
-      rankMap[eventKey][a] ||= { wins: 0, losses: 0 };
-      rankMap[eventKey][b] ||= { wins: 0, losses: 0 };
-      if (m.winner_side === 'A') {
-        rankMap[eventKey][a].wins += 1;
-        rankMap[eventKey][b].losses += 1;
-      } else {
-        rankMap[eventKey][b].wins += 1;
-        rankMap[eventKey][a].losses += 1;
-      }
-    }
-  }
-
-  const topCategories = Object.entries(categoryCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([category, count]) => ({ category, count }));
-
-  const eventTabs = Object.entries(eventCount)
-    .map(([eventKey, matchCount]) => ({
-      eventKey,
-      matchCount,
-      finishedCount: eventFinishedCount[eventKey] || 0,
-    }))
-    .sort((a, b) => b.matchCount - a.matchCount);
-
-  const rankingByEvent: Record<string, TeamStat[]> = {};
-  for (const [eventKey, teams] of Object.entries(rankMap)) {
-    rankingByEvent[eventKey] = Object.entries(teams)
-      .map(([team, wl]) => {
-        const played = wl.wins + wl.losses;
-        return {
-          team,
-          played,
-          wins: wl.wins,
-          losses: wl.losses,
-          winRate: played > 0 ? Number(((wl.wins / played) * 100).toFixed(1)) : 0,
-        };
-      })
-      .sort((a, b) => {
-        if (b.wins !== a.wins) return b.wins - a.wins;
-        if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-        if (b.played !== a.played) return b.played - a.played;
-        return a.team.localeCompare(b.team);
-      });
-  }
-
-  return {
-    totalMatches: rows.length,
-    finishedMatches,
-    totalPlayers: playersSet.size,
-    totalTournaments: tournamentsSet.size,
-    selectedTournament: tournamentName,
-    topCategories,
-    eventTabs,
-    rankingByEvent,
-  };
 }
 
 function mapRpcStats(payload: unknown): StatsModel {
@@ -197,28 +93,6 @@ function mapRpcStats(payload: unknown): StatsModel {
       : [],
     rankingByEvent,
   };
-}
-
-async function fetchTournamentRows(tournamentName: string) {
-  const BATCH_SIZE = 300;
-  const collected: MatchLite[] = [];
-  let from = 0;
-
-  while (true) {
-    const { data, error } = await supabase
-      .from('matches')
-      .select('players_a,players_b,tournament_name,category,winner_side,event_key')
-      .eq('tournament_name', tournamentName)
-      .range(from, from + BATCH_SIZE - 1);
-
-    if (error) throw error;
-    const batch = (data || []) as MatchLite[];
-    collected.push(...batch);
-    if (batch.length < BATCH_SIZE) break;
-    from += BATCH_SIZE;
-  }
-
-  return collected;
 }
 
 export default function Stats() {
@@ -330,9 +204,7 @@ export default function Stats() {
       let nextStats: StatsModel;
 
       if (rpc.error) {
-        if (!isMissingTournamentStatsRpc(rpc.error)) throw rpc.error;
-        const rows = await fetchTournamentRows(targetTournament);
-        nextStats = buildStatsModel(rows, targetTournament);
+        throw rpc.error;
       } else {
         nextStats = mapRpcStats(rpc.data);
       }
@@ -387,7 +259,7 @@ export default function Stats() {
       r.wins,
       r.losses,
       r.played,
-      `${(r.winRate * 100).toFixed(1)}%`
+      `${r.winRate.toFixed(1)}%`
     ]);
     
     const csvContent = [
@@ -425,7 +297,7 @@ export default function Stats() {
     topPlayers: activeRanking.slice(0, 3).map(r => ({
       name: r.team,
       wins: r.wins,
-      winRate: r.winRate * 100,
+      winRate: r.winRate,
     })),
     totalMatches: stats.totalMatches,
     qrCodeUrl: fullUrl,
@@ -677,7 +549,7 @@ export default function Stats() {
                   <td className="p-4 font-extrabold text-orange-600">{r.wins}</td>
                   <td className="p-4 font-extrabold text-brand-gray">{r.losses}</td>
                   <td className="p-4 font-extrabold text-brand-brown">{r.played}</td>
-                  <td className="p-4 font-extrabold text-brand-brown">{(r.winRate * 100).toFixed(1)}%</td>
+                  <td className="p-4 font-extrabold text-brand-brown">{r.winRate.toFixed(1)}%</td>
                 </tr>
               ))}
               {activeRanking.length === 0 && (

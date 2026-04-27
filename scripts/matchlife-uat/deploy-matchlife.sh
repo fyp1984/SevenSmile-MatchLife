@@ -95,6 +95,10 @@ location = ${APP_PATH} {
     return 301 ${APP_PATH}/;
 }
 
+location ~ ^/(matches|player|stats|leaderboard|data-sources|guide|sync|follow|gate)(/.*)?$ {
+    return 302 \$scheme://\$http_host${APP_PATH}\$request_uri;
+}
+
 location ^~ ${APP_PATH}/supabase/ {
     rewrite ^${APP_PATH}/supabase/(.*)$ /\$1 break;
     proxy_pass ${SUPABASE_REST_UPSTREAM};
