@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSportTab, SPORTS } from '../components/SportTabBar';
-import { Medal, Trophy, Activity } from 'lucide-react';
+import { Medal, Trophy, Activity, AlertTriangle } from 'lucide-react';
 import { buildUnavailableDataMessage } from '../lib/dataSourceHints';
+import {
+  buildScopedStatsPauseNotice,
+  useLeaderboardGovernance,
+} from '../hooks/usePendingPersistGuard';
 
 type PlayerRanking = {
   rank: number;
@@ -69,11 +73,32 @@ export default function Leaderboard() {
   const [submittedFilters, setSubmittedFilters] = useState<RankingFilters | null>(null);
   const cacheRef = useRef(new Map<string, PlayerRanking[]>());
   const hasSearched = submittedFilters !== null;
+  const governanceFilters = useMemo(
+    () => ({
+      sport: hasSearched ? submittedFilters?.sport || '' : '',
+      gender: hasSearched ? submittedFilters?.gender || 'all' : 'all',
+      mode: hasSearched ? submittedFilters?.mode || 'all' : 'all',
+    }),
+    [hasSearched, submittedFilters],
+  );
+  const {
+    scope: governanceScope,
+    checking: governanceChecking,
+    error: governanceError,
+    hasScopePause: hasBlockingRankings,
+    refreshScope: refreshLeaderboardGovernance,
+  } = useLeaderboardGovernance(governanceFilters);
+  const previousPauseRankingsRef = useRef(hasBlockingRankings);
   const filtersDirty =
     !submittedFilters ||
     submittedFilters.sport !== activeSport ||
     submittedFilters.gender !== activeGender ||
     submittedFilters.mode !== activeMode;
+  const pauseNotice = useMemo(
+    () => buildScopedStatsPauseNotice(governanceScope, governanceError),
+    [governanceError, governanceScope],
+  );
+  const shouldPauseRankings = hasBlockingRankings || Boolean(governanceError);
 
   useEffect(() => {
     if (!submittedFilters) {
@@ -84,6 +109,20 @@ export default function Leaderboard() {
     let cancelled = false;
     const cacheKey = [submittedFilters.sport, submittedFilters.gender, submittedFilters.mode].join(':');
     void (async () => {
+      const runtimeCheck = await refreshLeaderboardGovernance(
+        {
+          sport: submittedFilters.sport,
+          gender: submittedFilters.gender,
+          mode: submittedFilters.mode,
+        },
+        !rankings.length,
+      );
+      if (cancelled) return;
+      if (runtimeCheck.error || runtimeCheck.scope?.isPaused) {
+        setLoading(false);
+        return;
+      }
+
       const cached = cacheRef.current.get(cacheKey);
       if (cached) {
         setRankings(cached);
@@ -124,7 +163,23 @@ export default function Leaderboard() {
       cancelled = true;
       setLoading(false);
     };
-  }, [submittedFilters]);
+  }, [rankings.length, submittedFilters, refreshLeaderboardGovernance]);
+
+  useEffect(() => {
+    const wasPauseRankings = previousPauseRankingsRef.current;
+    previousPauseRankingsRef.current = hasBlockingRankings;
+    if (
+      wasPauseRankings &&
+      !hasBlockingRankings &&
+      submittedFilters &&
+      submittedFilters.sport === governanceFilters.sport &&
+      submittedFilters.gender === governanceFilters.gender &&
+      submittedFilters.mode === governanceFilters.mode
+    ) {
+      cacheRef.current.clear();
+      setSubmittedFilters({ ...submittedFilters });
+    }
+  }, [governanceFilters, hasBlockingRankings, submittedFilters]);
 
   const runSearch = () => {
     setSubmittedFilters({
@@ -223,16 +278,21 @@ export default function Leaderboard() {
 
       <div className="mb-6 flex w-full flex-col gap-3 rounded-3xl border border-orange-100 bg-white/80 p-5 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-brand-gray">
-          {hasSearched && !filtersDirty
-            ? '当前结果已与所选筛选条件同步。'
-            : '调整筛选条件后，点击“开始检索”再加载排行榜。'}
+          {governanceChecking
+            ? '正在准备当前排行榜...'
+            : shouldPauseRankings
+              ? '当前筛选范围的数据仍在更新，排行榜稍后开放。'
+              : hasSearched && !filtersDirty
+                ? '当前结果已与所选筛选条件同步。'
+                : '调整筛选条件后，点击“开始检索”再加载排行榜。'}
         </div>
         <button
           type="button"
           onClick={runSearch}
+          disabled={governanceChecking || hasBlockingRankings}
           className="inline-flex h-11 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-6 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400"
         >
-          {hasSearched ? '更新排行榜' : '开始检索'}
+          {governanceChecking ? '准备中...' : hasBlockingRankings ? '稍后查看' : hasSearched ? '更新排行榜' : '开始检索'}
         </button>
       </div>
 
@@ -242,7 +302,48 @@ export default function Leaderboard() {
         </div>
       )}
 
-      {!hasSearched ? (
+      {shouldPauseRankings && (
+        <div className="mb-6 w-full rounded-3xl border border-amber-200 bg-amber-50 px-6 py-4 text-sm text-amber-800">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+            <div>
+              <div className="font-bold text-amber-900">排行榜已暂停</div>
+              <div className="mt-1 leading-6">{pauseNotice}</div>
+              {governanceScope?.scopeSummary && (
+                <div className="mt-2 leading-6">影响范围：{governanceScope.scopeSummary}</div>
+              )}
+              {governanceScope?.recoveryHint && (
+                <div className="mt-2 leading-6">建议稍后：{governanceScope.recoveryHint}</div>
+              )}
+              {governanceScope && governanceScope.affectedSources.length > 0 && (
+                <div className="mt-2 leading-6">
+                  影响来源：{governanceScope.affectedSources.join('、')}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shouldPauseRankings ? (
+        <div className="w-full rounded-3xl border border-amber-200 bg-amber-50/80 p-12 text-center text-amber-800">
+          <div className="text-base font-bold text-amber-900">
+            {governanceChecking ? '正在准备排行榜...' : pauseNotice}
+          </div>
+          {governanceScope?.scopeSummary && (
+            <div className="mt-3 text-sm leading-6">{governanceScope.scopeSummary}</div>
+          )}
+          {governanceScope?.recoveryHint && (
+            <div className="mt-2 text-sm leading-6">建议稍后：{governanceScope.recoveryHint}</div>
+          )}
+          {governanceScope && governanceScope.affectedTournaments.length > 0 && (
+            <div className="mt-2 text-sm leading-6">
+              涉及赛事：{governanceScope.affectedTournaments.slice(0, 3).join('、')}
+              {governanceScope.affectedTournaments.length > 3 ? ' 等' : ''}
+            </div>
+          )}
+        </div>
+      ) : !hasSearched ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Trophy className="mx-auto mb-4 h-16 w-16 text-orange-200" />
           <h3 className="mb-2 text-xl font-bold text-brand-brown">尚未开始检索</h3>
