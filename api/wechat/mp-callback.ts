@@ -145,7 +145,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
   const event = extractXmlValue(xml, 'Event').trim().toUpperCase();
   const eventKey = extractXmlValue(xml, 'EventKey').trim();
 
-  let reply = '欢迎关注“七笑果-文体有料”。如需进入“七笑果-赛事生涯”，请后台留言获取访问码。';
+  let reply = '欢迎关注“七笑果-文体中心”。如需进入“七笑果-赛事生涯”，请后台留言获取访问码。';
   if (msgType === 'text' && content === KEYWORD) {
     const ticket = issueMagicTicket(fromUser, '/');
     reply = `点击直达：${APP_ORIGIN}${APP_BASE_PATH}/wechat/complete?ticket=${encodeURIComponent(ticket)}\n10分钟内有效，若失效请再次回复“${KEYWORD}”。`;

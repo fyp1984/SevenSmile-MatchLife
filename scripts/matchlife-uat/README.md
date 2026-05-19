@@ -136,7 +136,7 @@ export APP_BASE_PATH=/7smile-matchlife/
 
 用户访问流程：
 
-- 关注公众号“七笑果-文体有料”
+- 关注公众号“七笑果-文体中心”
 - 回复关键词“比赛生涯”
 - 通过直达链接或访问码进入 `/7smile-matchlife/gate/wechat`
 

@@ -75,7 +75,7 @@ export default function Layout() {
             onClick={() => setFollowModalOpen(true)}
             className="font-bold text-brand-brown underline decoration-orange-200 underline-offset-4 transition-colors hover:text-orange-500"
           >
-            文体有料
+            文体中心
           </button>
         </div>
         <p className="mb-2">提供赛事结果、排行与进展查看，方便快速掌握最新比赛信息。</p>
@@ -96,7 +96,7 @@ export default function Layout() {
               <div>
                 <h2 className="text-xl font-extrabold text-brand-brown">关注公众号</h2>
                 <p className="mt-2 text-sm leading-6 text-brand-gray">
-                  微信扫码关注“七笑果-文体有料”公众号，获取最新内容与访问指引。
+                  微信扫码关注“七笑果-文体中心”公众号，获取最新内容与访问指引。
                 </p>
               </div>
               <button
@@ -112,7 +112,7 @@ export default function Layout() {
             <div className="rounded-3xl border border-orange-100 bg-gradient-to-b from-orange-50 to-white p-4">
               <img
                 src={`${import.meta.env.BASE_URL}sevensmile-wechat-qrcode.jpg`}
-                alt="七笑果-文体有料公众号二维码"
+                alt="七笑果-文体中心公众号二维码"
                 className="mx-auto w-full max-w-[280px] rounded-2xl bg-white"
               />
             </div>
