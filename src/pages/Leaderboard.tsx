@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useSportTab, SPORTS } from '../components/SportTabBar';
 import { Medal, Trophy, Activity, AlertTriangle } from 'lucide-react';
 import { buildUnavailableDataMessage } from '../lib/dataSourceHints';
+import { fetchSourceLabelByRaceId, replaceTournamentPlaceholders } from '../lib/dataSources';
 import {
   buildScopedStatsPauseNotice,
   useLeaderboardGovernance,
@@ -71,6 +72,7 @@ export default function Leaderboard() {
   const [activeGender, setActiveGender] = useState<GenderFilter>('all');
   const [activeMode, setActiveMode] = useState<ModeFilter>('all');
   const [submittedFilters, setSubmittedFilters] = useState<RankingFilters | null>(null);
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
   const cacheRef = useRef(new Map<string, PlayerRanking[]>());
   const hasSearched = submittedFilters !== null;
   const governanceFilters = useMemo(
@@ -98,7 +100,26 @@ export default function Leaderboard() {
     () => buildScopedStatsPauseNotice(governanceScope, governanceError),
     [governanceError, governanceScope],
   );
+  const governancePauseNotice = useMemo(
+    () => replaceTournamentPlaceholders(pauseNotice || '', sourceLabelByRaceId),
+    [pauseNotice, sourceLabelByRaceId],
+  );
+  const governanceScopeSummary = useMemo(
+    () => replaceTournamentPlaceholders(governanceScope?.scopeSummary || '', sourceLabelByRaceId),
+    [governanceScope?.scopeSummary, sourceLabelByRaceId],
+  );
+  const governanceRecoveryHint = useMemo(
+    () => replaceTournamentPlaceholders(governanceScope?.recoveryHint || '', sourceLabelByRaceId),
+    [governanceScope?.recoveryHint, sourceLabelByRaceId],
+  );
   const shouldPauseRankings = hasBlockingRankings || Boolean(governanceError);
+
+  useEffect(() => {
+    void (async () => {
+      const labels = await fetchSourceLabelByRaceId();
+      setSourceLabelByRaceId(labels);
+    })();
+  }, []);
 
   useEffect(() => {
     if (!submittedFilters) {
@@ -308,60 +329,37 @@ export default function Leaderboard() {
             <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
             <div>
               <div className="font-bold text-amber-900">排行榜已暂停</div>
-              <div className="mt-1 leading-6">{pauseNotice}</div>
-              {governanceScope?.scopeSummary && (
-                <div className="mt-2 leading-6">影响范围：{governanceScope.scopeSummary}</div>
+              <div className="mt-1 leading-6">{governancePauseNotice}</div>
+              {governanceScopeSummary && (
+                <div className="mt-2 leading-6">影响范围：{governanceScopeSummary}</div>
               )}
-              {governanceScope?.recoveryHint && (
-                <div className="mt-2 leading-6">建议稍后：{governanceScope.recoveryHint}</div>
-              )}
-              {governanceScope && governanceScope.affectedSources.length > 0 && (
-                <div className="mt-2 leading-6">
-                  影响来源：{governanceScope.affectedSources.join('、')}
-                </div>
+              {governanceRecoveryHint && (
+                <div className="mt-2 leading-6">建议稍后：{governanceRecoveryHint}</div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {shouldPauseRankings ? (
-        <div className="w-full rounded-3xl border border-amber-200 bg-amber-50/80 p-12 text-center text-amber-800">
-          <div className="text-base font-bold text-amber-900">
-            {governanceChecking ? '正在准备排行榜...' : pauseNotice}
-          </div>
-          {governanceScope?.scopeSummary && (
-            <div className="mt-3 text-sm leading-6">{governanceScope.scopeSummary}</div>
-          )}
-          {governanceScope?.recoveryHint && (
-            <div className="mt-2 text-sm leading-6">建议稍后：{governanceScope.recoveryHint}</div>
-          )}
-          {governanceScope && governanceScope.affectedTournaments.length > 0 && (
-            <div className="mt-2 text-sm leading-6">
-              涉及赛事：{governanceScope.affectedTournaments.slice(0, 3).join('、')}
-              {governanceScope.affectedTournaments.length > 3 ? ' 等' : ''}
-            </div>
-          )}
-        </div>
-      ) : !hasSearched ? (
+      {!shouldPauseRankings && !hasSearched ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Trophy className="mx-auto mb-4 h-16 w-16 text-orange-200" />
           <h3 className="mb-2 text-xl font-bold text-brand-brown">尚未开始检索</h3>
           <p className="text-sm text-brand-gray">请先选择筛选条件，再点击“开始检索”加载排行榜。</p>
         </div>
-      ) : loading && rankings.length === 0 ? (
+      ) : !shouldPauseRankings && loading && rankings.length === 0 ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Activity className="w-12 h-12 text-orange-400 mx-auto mb-4 animate-pulse" />
           <h3 className="text-xl font-bold text-brand-brown mb-2">正在获取数据...</h3>
           <p className="text-brand-gray text-sm">稍等片刻，排行榜正在路上</p>
         </div>
-      ) : rankings.length === 0 ? (
+      ) : !shouldPauseRankings && rankings.length === 0 ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Trophy className="w-16 h-16 text-orange-200 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-brand-brown mb-2">暂无排行榜数据</h3>
           <p className="text-brand-gray text-sm">{buildUnavailableDataMessage(submittedFilters?.sport || activeSport)}</p>
         </div>
-      ) : (
+      ) : !shouldPauseRankings ? (
         <div className="w-full bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-orange-50 overflow-hidden">
           <div className="px-6 py-5 border-b border-orange-100 bg-orange-50/40">
             <h3 className="text-xl font-bold text-brand-brown flex items-center gap-2">
@@ -476,7 +474,7 @@ export default function Leaderboard() {
             </div>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { defaultSources, fetchSourcesFromDb, getRaceIdFromSource, type SourceItem } from '../lib/dataSources';
+import {
+  buildSourceLabelByRaceId,
+  defaultSources,
+  extractRaceIdFromTournamentName,
+  fetchSourcesFromDb,
+  replaceTournamentPlaceholders,
+  resolveTournamentDisplayName,
+  type SourceItem,
+} from '../lib/dataSources';
 import { getFriendlySupabaseErrorMessage, retrySupabaseOperation, supabase } from '../lib/supabase';
 import { Activity, AlertTriangle, BarChart3, CheckCircle, Medal, Search, Trophy, TrendingUp, Users, Download, Share2 } from 'lucide-react';
 import ShareModal from '../components/ShareModal';
@@ -44,6 +52,21 @@ type StatsModel = {
 };
 
 const RECENT_TOURNAMENTS_CACHE_KEY = 'matchlife_recent_tournaments_cache_v1';
+
+function sanitizeRecentTournamentOptions(
+  rows: RecentTournamentOption[],
+  sourceLabelByRaceId: Record<string, string>,
+) {
+  return rows.map((row) => {
+    const resolvedTournamentName = resolveTournamentDisplayName(row.tournament_name, sourceLabelByRaceId);
+    const resolvedAliases = row.aliases.map((alias) => resolveTournamentDisplayName(alias, sourceLabelByRaceId));
+    return {
+      ...row,
+      tournament_name: resolvedTournamentName,
+      aliases: Array.from(new Set([...resolvedAliases, resolvedTournamentName])),
+    };
+  });
+}
 
 function readSessionCache<T>(key: string): T | null {
   try {
@@ -98,9 +121,8 @@ function formatTournamentDisplayName(name: string) {
     .trim();
 }
 
-function extractTournamentRaceId(name: string) {
-  const match = String(name || '').match(/#(\d+)\s*$/);
-  return match ? Number(match[1]) : null;
+function isManualTournamentPlaceholder(name: string) {
+  return /^manual-source-\d+$/i.test(String(name || '').trim());
 }
 
 function choosePreferredTournamentLabel(
@@ -109,6 +131,9 @@ function choosePreferredTournamentLabel(
 ) {
   if (preferredLabel) return preferredLabel;
   return [...aliases].sort((a, b) => {
+    const aIsManualPlaceholder = isManualTournamentPlaceholder(a);
+    const bIsManualPlaceholder = isManualTournamentPlaceholder(b);
+    if (aIsManualPlaceholder !== bIsManualPlaceholder) return aIsManualPlaceholder ? 1 : -1;
     const aHasSuffix = /#\d+\s*$/.test(a);
     const bHasSuffix = /#\d+\s*$/.test(b);
     if (aHasSuffix !== bHasSuffix) return aHasSuffix ? 1 : -1;
@@ -118,12 +143,7 @@ function choosePreferredTournamentLabel(
 }
 
 function buildRecentTournamentOptions(rows: RecentTournamentRow[], sources: SourceItem[]) {
-  const sourceLabelByRaceId = new Map<number, string>();
-  for (const source of sources) {
-    if (!source.enabled) continue;
-    const raceId = getRaceIdFromSource(source.url);
-    if (raceId) sourceLabelByRaceId.set(raceId, source.name.trim());
-  }
+  const sourceLabelByRaceId = buildSourceLabelByRaceId(sources);
 
   const grouped = new Map<
     string,
@@ -139,9 +159,10 @@ function buildRecentTournamentOptions(rows: RecentTournamentRow[], sources: Sour
   for (const row of rows) {
     const rawName = String(row.tournament_name || '').trim();
     if (!rawName) continue;
-    const raceId = extractTournamentRaceId(rawName);
-    const preferredLabel = raceId ? sourceLabelByRaceId.get(raceId) : undefined;
-    const key = raceId ? `race:${raceId}` : normalizeTournamentKey(rawName);
+    const raceId = extractRaceIdFromTournamentName(rawName);
+    const resolvedDisplayName = resolveTournamentDisplayName(rawName, sourceLabelByRaceId);
+    const preferredLabel = resolvedDisplayName !== rawName ? resolvedDisplayName : undefined;
+    const key = raceId ? `race:${raceId}` : normalizeTournamentKey(resolvedDisplayName);
     const latestAt = row.latest_at || new Date(0).toISOString();
     const existing = grouped.get(key);
 
@@ -295,6 +316,7 @@ export default function Stats() {
   const [recentTournaments, setRecentTournaments] = useState<RecentTournamentOption[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
   const [selectedForLoad, setSelectedForLoad] = useState('');
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
   const [loadedTournament, setLoadedTournament] = useState('');
   const requestIdRef = useRef(0);
   const statsCacheRef = useRef(new Map<string, StatsModel>());
@@ -342,6 +364,14 @@ export default function Stats() {
       ]);
       const sourceItems =
         sourceResult.status === 'fulfilled' ? sourceResult.value : defaultSources;
+      const nextSourceLabelByRaceId = buildSourceLabelByRaceId(sourceItems);
+      setSourceLabelByRaceId(nextSourceLabelByRaceId);
+      if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+        const sanitizedCachedRows = sanitizeRecentTournamentOptions(cachedRows, nextSourceLabelByRaceId);
+        setRecentTournaments(sanitizedCachedRows);
+        writeSessionCache(RECENT_TOURNAMENTS_CACHE_KEY, sanitizedCachedRows);
+        setSelectedForLoad((prev) => resolveTournamentDisplayName(prev, nextSourceLabelByRaceId) || sanitizedCachedRows[0]?.tournament_name || '');
+      }
       const recentPayload =
         recentResult.status === 'fulfilled' ? recentResult.value : { data: null, error: recentResult.reason };
       const { data, error } = recentPayload;
@@ -381,9 +411,12 @@ export default function Stats() {
           existing.match_count += 1;
         }
 
-        const rows = buildRecentTournamentOptions(
+        const rows = sanitizeRecentTournamentOptions(
+          buildRecentTournamentOptions(
           Array.from(deduped.values()).sort((a, b) => Date.parse(b.latest_at) - Date.parse(a.latest_at)).slice(0, 40),
           sourceItems,
+          ),
+          nextSourceLabelByRaceId,
         );
         setRecentTournaments(rows);
         writeSessionCache(RECENT_TOURNAMENTS_CACHE_KEY, rows);
@@ -394,7 +427,10 @@ export default function Stats() {
         return;
       }
 
-      const rows = buildRecentTournamentOptions((data || []) as RecentTournamentRow[], sourceItems);
+      const rows = sanitizeRecentTournamentOptions(
+        buildRecentTournamentOptions((data || []) as RecentTournamentRow[], sourceItems),
+        nextSourceLabelByRaceId,
+      );
       setRecentTournaments(rows);
       writeSessionCache(RECENT_TOURNAMENTS_CACHE_KEY, rows);
       if (rows[0]?.tournament_name) {
@@ -407,6 +443,17 @@ export default function Stats() {
       if (exportFeedbackTimerRef.current) window.clearTimeout(exportFeedbackTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!recentTournaments.some((row) => isManualTournamentPlaceholder(row.tournament_name))) return;
+    if (Object.keys(sourceLabelByRaceId).length === 0) return;
+    const sanitizedRows = sanitizeRecentTournamentOptions(recentTournaments, sourceLabelByRaceId);
+    const changed = sanitizedRows.some((row, index) => row.tournament_name !== recentTournaments[index]?.tournament_name);
+    if (!changed) return;
+    setRecentTournaments(sanitizedRows);
+    writeSessionCache(RECENT_TOURNAMENTS_CACHE_KEY, sanitizedRows);
+    setSelectedForLoad((prev) => resolveTournamentDisplayName(prev, sourceLabelByRaceId));
+  }, [recentTournaments, sourceLabelByRaceId]);
 
   const tournamentOptions = useMemo(() => {
     const allNames = recentTournaments.map((row) => row.tournament_name);
@@ -427,6 +474,22 @@ export default function Stats() {
   const pauseNotice = useMemo(
     () => buildScopedStatsPauseNotice(governanceScope, governanceError),
     [governanceError, governanceScope],
+  );
+  const governancePauseNotice = useMemo(
+    () => replaceTournamentPlaceholders(pauseNotice || '', sourceLabelByRaceId),
+    [pauseNotice, sourceLabelByRaceId],
+  );
+  const governanceScopeSummary = useMemo(
+    () => replaceTournamentPlaceholders(governanceScope?.scopeSummary || '', sourceLabelByRaceId),
+    [governanceScope?.scopeSummary, sourceLabelByRaceId],
+  );
+  const governanceRecoveryHint = useMemo(
+    () => replaceTournamentPlaceholders(governanceScope?.recoveryHint || '', sourceLabelByRaceId),
+    [governanceScope?.recoveryHint, sourceLabelByRaceId],
+  );
+  const governanceAffectedTournaments = useMemo(
+    () => (governanceScope?.affectedTournaments || []).map((name) => resolveTournamentDisplayName(name, sourceLabelByRaceId)),
+    [governanceScope?.affectedTournaments, sourceLabelByRaceId],
   );
   const shouldPauseStats = hasBlockingStats || Boolean(governanceError);
 
@@ -641,17 +704,17 @@ export default function Stats() {
             <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
             <div>
               <div className="font-bold text-amber-900">统计稍后开放</div>
-              <div className="mt-1 leading-6">{pauseNotice}</div>
-              {governanceScope?.scopeSummary && (
-                <div className="mt-2 leading-6">影响范围：{governanceScope.scopeSummary}</div>
+              <div className="mt-1 leading-6">{governancePauseNotice}</div>
+              {governanceScopeSummary && (
+                <div className="mt-2 leading-6">影响范围：{governanceScopeSummary}</div>
               )}
-              {governanceScope?.recoveryHint && (
-                <div className="mt-2 leading-6">建议稍后：{governanceScope.recoveryHint}</div>
+              {governanceRecoveryHint && (
+                <div className="mt-2 leading-6">建议稍后：{governanceRecoveryHint}</div>
               )}
-              {governanceScope && governanceScope.affectedTournaments.length > 0 && (
+              {governanceAffectedTournaments.length > 0 && (
                 <div className="mt-2 leading-6">
-                  涉及赛事：{governanceScope.affectedTournaments.slice(0, 3).join('、')}
-                  {governanceScope.affectedTournaments.length > 3 ? ' 等' : ''}
+                  涉及赛事：{governanceAffectedTournaments.slice(0, 3).join('、')}
+                  {governanceAffectedTournaments.length > 3 ? ' 等' : ''}
                 </div>
               )}
             </div>
@@ -727,25 +790,7 @@ export default function Stats() {
         </div>
       </div>
 
-      {shouldPauseStats ? (
-        <div className="w-full rounded-3xl border border-amber-200 bg-amber-50/80 p-8 text-center text-amber-800">
-          <div className="text-base font-bold text-amber-900">
-            {governanceChecking ? '正在准备统计数据...' : pauseNotice}
-          </div>
-          {governanceScope?.scopeSummary && (
-            <div className="mt-3 text-sm leading-6">{governanceScope.scopeSummary}</div>
-          )}
-          {governanceScope?.recoveryHint && (
-            <div className="mt-2 text-sm leading-6">建议稍后：{governanceScope.recoveryHint}</div>
-          )}
-          {governanceScope && governanceScope.affectedMatchCount > 0 && (
-            <div className="mt-2 text-sm leading-6">
-              影响比赛：{governanceScope.affectedMatchCount} 场
-              {governanceScope.affectedSources.length > 0 ? `；影响来源：${governanceScope.affectedSources.join('、')}` : ''}
-            </div>
-          )}
-        </div>
-      ) : !stats ? (
+      {!shouldPauseStats && !stats ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-8 text-center text-brand-gray">
           {loading
             ? '正在生成看板数据...'
@@ -753,7 +798,7 @@ export default function Stats() {
               ? `赛事“${loadedTournament}”当前暂无可统计数据。${DATA_SOURCE_CONTACT_HINT}`
               : '请选择赛事后点击“加载统计”。'}
         </div>
-      ) : (
+      ) : !shouldPauseStats ? (
       <div className={`w-full grid grid-cols-1 md:grid-cols-4 gap-6 mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-sm border border-orange-50 flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-500 flex-shrink-0">
@@ -795,7 +840,7 @@ export default function Stats() {
           </div>
         </div>
       </div>
-      )}
+      ) : null}
       {stats && !shouldPauseStats && (
       <div className={`w-full mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
         <div className="bg-white/60 backdrop-blur-md rounded-3xl p-8 border border-orange-50">

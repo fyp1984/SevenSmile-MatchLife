@@ -159,3 +159,12 @@ export function resolveTournamentDisplayName(
   if (!raceId) return tournamentName;
   return sourceLabelByRaceId[String(raceId)] || tournamentName;
 }
+
+export function replaceTournamentPlaceholders(
+  text: string,
+  sourceLabelByRaceId: Record<string, string>,
+) {
+  return String(text || '').replace(/manual-source-(\d+)/gi, (match, raceId) => {
+    return sourceLabelByRaceId[String(raceId)] || match;
+  });
+}
