@@ -31,7 +31,7 @@ export default function WechatGate() {
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">关注验证</h1>
         <p className="text-sm text-brand-gray mb-6">
-          仅限关注“七笑果-文体有料”服务号的用户访问。推荐在微信内直接完成服务号验证；若微信授权异常，可通过后台留言获取访问码进入。
+          仅限关注“七笑果-文体有料”服务号的用户访问。推荐在微信内直接完成服务号验证；若微信授权异常，可回复关键词“比赛生涯”获取直达链接，或后台留言获取访问码进入。
         </p>
 
         {!isWeChat() && !isLocalhost() && (
@@ -51,7 +51,7 @@ export default function WechatGate() {
             <div className="font-bold text-brand-brown mb-1">推荐进入方式</div>
             <div>1. 在微信中关注服务号“七笑果-文体有料”</div>
             <div>2. 点击下方“微信内一键进入”完成服务号身份验证</div>
-            <div>3. 若授权异常，可后台留言，获取访问码</div>
+            <div>3. 若授权异常，可回复关键词“比赛生涯”获取直达链接，或后台留言获取访问码</div>
             <div className="mt-2 text-xs">访问码仅作为异常情况下的最后兜底方式。</div>
           </div>
 
