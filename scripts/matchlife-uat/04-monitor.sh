@@ -65,6 +65,8 @@ checked = []
 for path in paths:
     if not path.startswith('/'):
         continue
+    if not path.startswith(app_path):
+        raise SystemExit(f'asset path escaped app base: {path} (expected prefix {app_path})')
     subprocess.check_call(
         [
             'curl', '-k', '-fsSIL', '--max-time', '10',

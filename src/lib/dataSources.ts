@@ -117,3 +117,45 @@ export function getRaceIdFromSource(url: string): number | null {
     return null;
   }
 }
+
+export function extractRaceIdFromTournamentName(name: string): number | null {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+
+  const manualMatch = raw.match(/^manual-source-(\d+)$/i);
+  if (manualMatch) return Number(manualMatch[1]);
+
+  const suffixMatch = raw.match(/#(\d+)\s*$/);
+  if (suffixMatch) return Number(suffixMatch[1]);
+
+  return null;
+}
+
+export function buildSourceLabelByRaceId(sources: SourceItem[]) {
+  const labels: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source.enabled) continue;
+    const raceId = getRaceIdFromSource(source.url);
+    const name = String(source.name || '').trim();
+    if (raceId && name) labels[String(raceId)] = name;
+  }
+  return labels;
+}
+
+export async function fetchSourceLabelByRaceId() {
+  try {
+    const dbSources = await fetchSourcesFromDb();
+    return buildSourceLabelByRaceId(dbSources.length ? dbSources : defaultSources);
+  } catch {
+    return buildSourceLabelByRaceId(defaultSources);
+  }
+}
+
+export function resolveTournamentDisplayName(
+  tournamentName: string,
+  sourceLabelByRaceId: Record<string, string>,
+) {
+  const raceId = extractRaceIdFromTournamentName(tournamentName);
+  if (!raceId) return tournamentName;
+  return sourceLabelByRaceId[String(raceId)] || tournamentName;
+}

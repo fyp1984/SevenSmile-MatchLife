@@ -13,8 +13,10 @@ const LOCAL_API_BASE_PATH = `${APP_BASE_PATH || ''}/api`;
 const LEGACY_LOCAL_API_BASE_PATH = '/api';
 const ACCESS_COOKIE = 'matchlife_wechat_ok';
 const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
+const ACCESS_SESSION_COOKIE = 'matchlife_wechat_session';
 const ACCESS_COOKIE_TTL = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
 const ACCESS_VERSION = String(process.env.WECHAT_ACCESS_VERSION || '').trim() || new Date().toISOString().slice(0, 10);
+const SESSION_FORCE_CHECK_GRACE_MS = Number(process.env.WECHAT_SESSION_FORCE_CHECK_GRACE_MS || 60 * 1000);
 const ACCESS_LINK_KEYWORD = String(process.env.WECHAT_ACCESS_KEYWORD || '比赛生涯').trim();
 const ACCESS_LINK_SIGNING_SECRET =
   process.env.WECHAT_ACCESS_LINK_SECRET ||
@@ -22,6 +24,7 @@ const ACCESS_LINK_SIGNING_SECRET =
   process.env.WECHAT_ACCESS_CODES ||
   'matchlife-dev-secret';
 const ACCESS_LINK_TTL_SECONDS = Number(process.env.WECHAT_ACCESS_LINK_TTL_SECONDS || 10 * 60);
+const OAUTH_STATE_TTL_SECONDS = Number(process.env.WECHAT_OAUTH_STATE_TTL_SECONDS || 5 * 60);
 const FOLLOW_CACHE_TTL_MS = Number(process.env.WECHAT_FOLLOW_CACHE_TTL_MS || 5 * 60 * 1000);
 const FOLLOWER_LIST_CACHE_FILE = process.env.WECHAT_FOLLOWER_CACHE_FILE || '';
 const STRICT_FOLLOW_CHECK = process.env.WECHAT_STRICT_FOLLOW_CHECK === 'true';
@@ -40,11 +43,19 @@ const DEFAULT_SYNC_TOURNAMENT_NAME = String(
 let mpTokenCache = null;
 const usedTickets = new Map();
 const followCache = new Map();
+const oauthStates = new Map();
 let lastSyncTriggeredAt = 0;
 let activeSyncProcess = null;
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
+}
+
+function maskOpenid(openid) {
+  const value = String(openid || '').trim();
+  if (!value) return 'unknown';
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 function firstHeader(v) {
@@ -137,13 +148,39 @@ function redirect(res, location) {
   res.end();
 }
 
-function setAccessCookie(res, enabled) {
+function issueAccessSessionCookie(openid) {
+  if (!openid) return '';
+  const payload = {
+    o: openid,
+    v: ACCESS_VERSION,
+    i: Date.now(),
+    e: Date.now() + ACCESS_COOKIE_TTL * 1000,
+  };
+  const encoded = base64url(JSON.stringify(payload));
+  return `${encoded}.${signValue(encoded)}`;
+}
+
+function parseAccessSessionCookie(value) {
+  if (!value || typeof value !== 'string' || !value.includes('.')) {
+    throw new Error('invalid session cookie');
+  }
+  const [encoded, sig] = value.split('.', 2);
+  if (signValue(encoded) !== sig) throw new Error('bad session signature');
+  const payload = JSON.parse(base64urlDecode(encoded));
+  if (!payload?.o || !payload?.e) throw new Error('bad session payload');
+  if (Number(payload.e) < Date.now()) throw new Error('expired session');
+  return payload;
+}
+
+function setAccessCookie(res, enabled, openid = '') {
   const maxAge = enabled ? ACCESS_COOKIE_TTL : 0;
   const value = enabled ? '1' : '';
   const version = enabled ? ACCESS_VERSION : '';
+  const session = enabled ? issueAccessSessionCookie(openid) : '';
   res.setHeader('Set-Cookie', [
     `${ACCESS_COOKIE}=${value}; Max-Age=${maxAge}; Path=${APP_BASE_PATH || '/'}; SameSite=Lax; Secure`,
     `${ACCESS_VERSION_COOKIE}=${version}; Max-Age=${maxAge}; Path=${APP_BASE_PATH || '/'}; SameSite=Lax; Secure`,
+    `${ACCESS_SESSION_COOKIE}=${session}; Max-Age=${maxAge}; Path=${APP_BASE_PATH || '/'}; SameSite=Lax; Secure`,
   ]);
 }
 
@@ -208,6 +245,9 @@ function cleanupMaps() {
   for (const [openid, data] of followCache.entries()) {
     if ((data?.checkedAt || 0) + FOLLOW_CACHE_TTL_MS <= now) followCache.delete(openid);
   }
+  for (const [state, data] of oauthStates.entries()) {
+    if ((data?.expireAt || 0) <= now || data?.used) oauthStates.delete(state);
+  }
 }
 
 function readFollowerListCache() {
@@ -268,18 +308,23 @@ async function getMpAccessToken() {
   return mpTokenCache.token;
 }
 
-async function checkFollowStatus(openid) {
+async function checkFollowStatus(openid, options = {}) {
   cleanupMaps();
+  const force = options && options.force === true;
   const cached = followCache.get(openid);
-  if (cached && cached.checkedAt + FOLLOW_CACHE_TTL_MS > Date.now()) return cached.subscribed;
+  if (!force && cached && cached.subscribed && cached.checkedAt + FOLLOW_CACHE_TTL_MS > Date.now()) {
+    return true;
+  }
   const followerListCache = readFollowerListCache();
   if (
+    !force &&
     followerListCache &&
     followerListCache.refreshedAt + FOLLOW_CACHE_TTL_MS > Date.now()
   ) {
-    const subscribed = followerListCache.openids.has(openid);
-    followCache.set(openid, { subscribed, checkedAt: Date.now() });
-    return subscribed;
+    if (followerListCache.openids.has(openid)) {
+      followCache.set(openid, { subscribed: true, checkedAt: Date.now() });
+      return true;
+    }
   }
   const token = await getMpAccessToken();
   if (!token) throw new Error('missing mp app credentials');
@@ -289,9 +334,45 @@ async function checkFollowStatus(openid) {
   userUrl.searchParams.set('lang', 'zh_CN');
   const userRes = await fetch(userUrl.toString());
   const userJson = await userRes.json();
+  if (!userRes.ok || userJson?.errcode) {
+    throw new Error(`follow-check failed: ${JSON.stringify(userJson)}`);
+  }
   const subscribed = Number(userJson?.subscribe || 0) === 1;
-  followCache.set(openid, { subscribed, checkedAt: Date.now() });
+  if (subscribed) {
+    followCache.set(openid, { subscribed: true, checkedAt: Date.now() });
+  } else {
+    followCache.delete(openid);
+  }
   return subscribed;
+}
+
+async function handleSessionStatus(req, res) {
+  if (!hasAccessSession(req)) {
+    setAccessCookie(res, false);
+    sendJson(res, 401, { ok: false, error: '未登录或会话已过期' });
+    return;
+  }
+
+  try {
+    const cookies = parseCookies(req);
+    const session = parseAccessSessionCookie(cookies[ACCESS_SESSION_COOKIE] || '');
+    if (session.v && session.v !== ACCESS_VERSION) throw new Error('session version mismatch');
+    const issuedAt = Number(session.i || 0);
+    const forceRemoteCheck = !issuedAt || Date.now() - issuedAt > SESSION_FORCE_CHECK_GRACE_MS;
+    const subscribed = await checkFollowStatus(session.o, { force: forceRemoteCheck });
+    if (!subscribed) {
+      log('session status unsubscribed', maskOpenid(session.o));
+      setAccessCookie(res, false);
+      sendJson(res, 403, { ok: false, error: '请先关注公众号后再进入', redirectToFollow: true });
+      return;
+    }
+    setAccessCookie(res, true, session.o);
+    sendJson(res, 200, { ok: true, version: ACCESS_VERSION });
+  } catch (error) {
+    log('session status failed', error instanceof Error ? error.message : String(error));
+    setAccessCookie(res, false);
+    sendJson(res, 401, { ok: false, error: '会话校验失败，请重新验证' });
+  }
 }
 
 function verifyWechatSignature(signature, timestamp, nonce) {
@@ -319,19 +400,88 @@ function xmlTextReply(toUser, fromUser, content) {
 }
 
 async function handleOauthStart(req, res, url) {
-  const origin = getOrigin(req);
+  cleanupMaps();
+  const origin = getOrigin(req) || APP_ORIGIN;
   const next = safeNext(url.searchParams.get('next'));
-  redirect(res, `${toAppUrl(origin, '/gate/wechat')}?next=${encodeURIComponent(next)}`);
+  if (!APPID) {
+    redirect(res, `${toAppUrl(origin, '/gate/wechat')}?next=${encodeURIComponent(next)}`);
+    return;
+  }
+  const state = crypto.randomBytes(24).toString('hex');
+  oauthStates.set(state, {
+    next,
+    expireAt: Date.now() + OAUTH_STATE_TTL_SECONDS * 1000,
+    used: false,
+  });
+  const callback = new URL(`${origin}${API_BASE_PATH}/oauth-callback`);
+  const authUrl = new URL('https://open.weixin.qq.com/connect/oauth2/authorize');
+  authUrl.searchParams.set('appid', APPID);
+  authUrl.searchParams.set('redirect_uri', callback.toString());
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'snsapi_base');
+  authUrl.searchParams.set('state', state);
+  redirect(res, `${authUrl.toString()}#wechat_redirect`);
 }
 
 async function handleOauthCallback(req, res, url) {
   const origin = getOrigin(req) || APP_ORIGIN;
-  const next = safeNext(url.searchParams.get('next'));
-  setAccessCookie(res, false);
-  redirect(res, `${toAppUrl(origin, '/gate/wechat')}?next=${encodeURIComponent(next)}`);
+  cleanupMaps();
+  const code = String(url.searchParams.get('code') || '').trim();
+  const state = String(url.searchParams.get('state') || '').trim();
+  const oauthState = oauthStates.get(state);
+  const next = safeNext(oauthState?.next || '/');
+
+  if (!APPID || !SECRET || !code || !oauthState || oauthState.used || oauthState.expireAt <= Date.now()) {
+    setAccessCookie(res, false);
+    redirect(res, `${toAppUrl(origin, '/gate/wechat')}?next=${encodeURIComponent(next)}`);
+    return;
+  }
+
+  oauthState.used = true;
+
+  try {
+    const oauthUrl = new URL('https://api.weixin.qq.com/sns/oauth2/access_token');
+    oauthUrl.searchParams.set('appid', APPID);
+    oauthUrl.searchParams.set('secret', SECRET);
+    oauthUrl.searchParams.set('code', code);
+    oauthUrl.searchParams.set('grant_type', 'authorization_code');
+    const oauthRes = await fetch(oauthUrl.toString());
+    const oauthJson = await oauthRes.json();
+    const openid = String(oauthJson?.openid || '').trim();
+    if (!oauthRes.ok || !openid || oauthJson?.errcode) {
+      throw new Error(oauthJson?.errmsg || 'oauth exchange failed');
+    }
+
+    let subscribed = true;
+    try {
+      subscribed = await checkFollowStatus(openid, { force: true });
+    } catch (error) {
+      if (STRICT_FOLLOW_CHECK) throw error;
+      log('oauth follow check degraded', error instanceof Error ? error.message : String(error));
+    }
+
+    if (!subscribed) {
+      log('oauth callback unsubscribed', maskOpenid(openid), `next=${next}`);
+      setAccessCookie(res, false);
+      redirect(res, `${toAppUrl(origin, '/follow')}?next=${encodeURIComponent(next)}`);
+      return;
+    }
+
+    setAccessCookie(res, true, openid);
+    redirect(res, `${toAppUrl(origin, '/wechat/complete')}?ok=1&next=${encodeURIComponent(next)}`);
+  } catch (error) {
+    log('oauth callback failed', error instanceof Error ? error.message : String(error));
+    setAccessCookie(res, false);
+    redirect(res, `${toAppUrl(origin, '/gate/wechat')}?next=${encodeURIComponent(next)}`);
+  }
 }
 
 async function handleAccessCodeVerify(req, res) {
+  if (STRICT_FOLLOW_CHECK) {
+    setAccessCookie(res, false);
+    sendJson(res, 403, { ok: false, error: '当前环境必须先关注服务号，请使用微信内一键进入' });
+    return;
+  }
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -375,11 +525,11 @@ async function handleMagicLinkConsume(req, res, url) {
     }
     if (!subscribed) {
       setAccessCookie(res, false);
-      sendJson(res, 403, { ok: false, error: '请先关注公众号后再进入' });
+      sendJson(res, 403, { ok: false, error: '请先关注公众号后再进入', redirectToFollow: true });
       return;
     }
     usedTickets.set(payload.n, Number(payload.e));
-    setAccessCookie(res, true);
+    setAccessCookie(res, true, payload.o);
     sendJson(res, 200, { ok: true, next: safeNext(payload.p || '/'), version: ACCESS_VERSION });
   } catch (error) {
     setAccessCookie(res, false);
@@ -569,6 +719,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && isApiPath(url.pathname, '/oauth-callback')) {
       await handleOauthCallback(req, res, url);
+      return;
+    }
+
+    if (req.method === 'GET' && isApiPath(url.pathname, '/session-status')) {
+      await handleSessionStatus(req, res);
       return;
     }
 

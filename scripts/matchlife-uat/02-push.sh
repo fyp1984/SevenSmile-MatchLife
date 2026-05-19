@@ -90,6 +90,7 @@ content = "\n".join([
     f"WECHAT_ACCESS_VERSION={shlex.quote(os.getenv('WECHAT_ACCESS_VERSION', ''))}",
     f"WECHAT_ACCESS_LINK_TTL_SECONDS={shlex.quote(os.getenv('WECHAT_ACCESS_LINK_TTL_SECONDS', '600'))}",
     f"WECHAT_SESSION_TTL_SECONDS={shlex.quote(os.getenv('WECHAT_SESSION_TTL_SECONDS', '43200'))}",
+    f"WECHAT_STRICT_FOLLOW_CHECK={shlex.quote(os.getenv('WECHAT_STRICT_FOLLOW_CHECK', 'true'))}",
     f"WECHAT_MP_TOKEN={shlex.quote(os.getenv('WECHAT_MP_TOKEN', ''))}",
     f"WECHAT_MP_APPID={shlex.quote(os.getenv('WECHAT_MP_APPID', ''))}",
     f"WECHAT_MP_SECRET={shlex.quote(os.getenv('WECHAT_MP_SECRET', ''))}",

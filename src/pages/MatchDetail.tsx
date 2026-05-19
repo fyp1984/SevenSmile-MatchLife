@@ -9,6 +9,7 @@ import {
 import ShareModal from '../components/ShareModal';
 import type { MatchShareData } from '../lib/shareCard';
 import { resolveWinnerSide } from '../lib/matchResults';
+import { fetchSourceLabelByRaceId, resolveTournamentDisplayName } from '../lib/dataSources';
 import {
   buildMatchDetailPath,
   buildMatchTaggingPath,
@@ -161,6 +162,41 @@ export function MatchDetail() {
   const [playerRecentMatches, setPlayerRecentMatches] = useState<RelatedMatch[]>([]);
   const [matchEvents, setMatchEvents] = useState<MatchTagEvent[]>([]);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSourceLabels = async () => {
+      const labels = await fetchSourceLabelByRaceId();
+      if (!cancelled) setSourceLabelByRaceId(labels);
+    };
+
+    void loadSourceLabels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setMatch((current) => {
+      if (!current) return current;
+      const nextName = resolveTournamentDisplayName(current.tournament_name, sourceLabelByRaceId);
+      return nextName === current.tournament_name ? current : { ...current, tournament_name: nextName };
+    });
+    setRelatedMatches((current) =>
+      current.map((item) => {
+        const nextName = resolveTournamentDisplayName(item.tournament_name, sourceLabelByRaceId);
+        return nextName === item.tournament_name ? item : { ...item, tournament_name: nextName };
+      }),
+    );
+    setPlayerRecentMatches((current) =>
+      current.map((item) => {
+        const nextName = resolveTournamentDisplayName(item.tournament_name, sourceLabelByRaceId);
+        return nextName === item.tournament_name ? item : { ...item, tournament_name: nextName };
+      }),
+    );
+  }, [sourceLabelByRaceId]);
 
   useEffect(() => {
     if (!id) {
@@ -201,7 +237,15 @@ export function MatchDetail() {
       if (cancelled) return;
 
       if (relatedResult.status === 'fulfilled' && !relatedResult.value.error && Array.isArray(relatedResult.value.data)) {
-        setRelatedMatches((relatedResult.value.data as RelatedMatch[]).filter((item) => item.id !== excludeId).slice(0, 5));
+        setRelatedMatches(
+          (relatedResult.value.data as RelatedMatch[])
+            .filter((item) => item.id !== excludeId)
+            .slice(0, 5)
+            .map((item) => ({
+              ...item,
+              tournament_name: resolveTournamentDisplayName(item.tournament_name, sourceLabelByRaceId),
+            })),
+        );
       } else {
         setRelatedMatches([]);
       }
@@ -212,7 +256,13 @@ export function MatchDetail() {
         Array.isArray((recentResult.value as { data?: unknown[] }).data)
       ) {
         setPlayerRecentMatches(
-          ((recentResult.value as { data: RelatedMatch[] }).data || []).filter((item) => item.id !== excludeId).slice(0, 5),
+          ((recentResult.value as { data: RelatedMatch[] }).data || [])
+            .filter((item) => item.id !== excludeId)
+            .slice(0, 5)
+            .map((item) => ({
+              ...item,
+              tournament_name: resolveTournamentDisplayName(item.tournament_name, sourceLabelByRaceId),
+            })),
         );
       } else {
         setPlayerRecentMatches([]);
@@ -284,7 +334,10 @@ export function MatchDetail() {
 
         if (cancelled) return;
 
-        setMatch(nextMatch);
+        setMatch({
+          ...nextMatch,
+          tournament_name: resolveTournamentDisplayName(nextMatch.tournament_name, sourceLabelByRaceId),
+        });
         setError(null);
         if (!silent) setLoading(false);
         void fetchSupportData(nextMatch);
@@ -323,7 +376,10 @@ export function MatchDetail() {
         if (rpc.error) throw rpc.error;
         const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
         if (!row || cancelled) return;
-        setMatch(row as MatchDetailRow);
+        setMatch({
+          ...(row as MatchDetailRow),
+          tournament_name: resolveTournamentDisplayName((row as MatchDetailRow).tournament_name, sourceLabelByRaceId),
+        });
       } catch {
         // Polling failures should not replace the current detail card.
       } finally {
@@ -452,7 +508,7 @@ export function MatchDetail() {
 
   const shareUrl = fullUrl;
   const shareTitle = `${match.tournament_name} - ${playerANames} vs ${playerBNames}`;
-  const shareDesc = `比分：${match.score_text || '进行中'} | 七笑果 MatchLife`;
+  const shareDesc = `比分：${match.score_text || '进行中'} | 七笑果-赛事生涯`;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

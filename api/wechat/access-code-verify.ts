@@ -17,6 +17,7 @@ const ACCESS_COOKIE_TTL = 7 * 24 * 60 * 60;
 const ACCESS_VERSION =
   `${process.env.WECHAT_ACCESS_VERSION || process.env.VITE_WECHAT_ACCESS_VERSION || ''}`.trim() ||
   new Date().toISOString().slice(0, 10);
+const STRICT_FOLLOW_CHECK = process.env.WECHAT_STRICT_FOLLOW_CHECK === 'true';
 
 function getAppBasePath() {
   const v = (process.env.APP_BASE_PATH || '/').trim();
@@ -92,6 +93,12 @@ export default async function handler(req: VercelReq, res: VercelRes) {
   const code = String(body.code || '').trim().toUpperCase();
   const next = safeNext(String(body.next || '/'));
   const codes = getCodes();
+
+  if (STRICT_FOLLOW_CHECK) {
+    setAccessCookie(res, false);
+    sendJson(res, 403, { ok: false, error: '当前环境必须先关注服务号，请使用微信内一键进入' });
+    return;
+  }
 
   if (!codes.length) {
     sendJson(res, 500, { ok: false, error: '服务端未配置访问码' });

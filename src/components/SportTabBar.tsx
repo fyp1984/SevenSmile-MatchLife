@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { buildUnavailableDataMessage } from '../lib/dataSourceHints';
 
@@ -39,6 +39,14 @@ function useSportTab() {
 export default function SportTabBar() {
   const { activeSport, setActiveSport } = useSportTab();
   const [notice, setNotice] = useState<string>('');
+  const baseTabClass =
+    'relative inline-flex h-10 items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-bold transition-all duration-200 sm:text-sm';
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   return (
     <div className="w-full overflow-x-auto scrollbar-hide bg-white/80 backdrop-blur-sm border-b border-orange-50">
@@ -49,7 +57,7 @@ export default function SportTabBar() {
           </div>
         </div>
       )}
-      <div className="flex items-center justify-start md:justify-center gap-1 md:gap-3 px-2 py-2 min-w-max">
+      <div className="flex min-w-max items-center justify-start gap-2 px-2 py-2 md:justify-center md:gap-3">
         {SPORTS.map((sport) => {
           const isActive = activeSport === sport.key;
           return (
@@ -66,18 +74,21 @@ export default function SportTabBar() {
               }}
               aria-disabled={!sport.enabled}
               title={!sport.enabled ? buildUnavailableDataMessage(sport.key) : `${sport.label}内容`}
-              className={`relative flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold transition-all duration-200 ${
+              className={`${baseTabClass} ${
                 isActive
-                  ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-md'
+                  ? 'border-transparent bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-md shadow-orange-200/80'
                   : sport.enabled
-                  ? 'bg-orange-50 text-brand-brown hover:bg-orange-100 hover:text-orange-600'
-                  : 'bg-gray-50 text-gray-400 hover:bg-orange-50 hover:text-orange-500'
+                  ? 'border-orange-100 bg-white/90 text-brand-brown shadow-sm shadow-orange-100/40 hover:-translate-y-0.5 hover:border-orange-200 hover:bg-orange-50 hover:text-orange-500 hover:shadow-md hover:shadow-orange-100/70'
+                  : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-orange-100 hover:bg-orange-50 hover:text-orange-500'
               }`}
             >
-              <span className="text-base">{sport.emoji}</span>
-              <span className="hidden sm:inline">{sport.label}</span>
               {isActive && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white" />
+                <span className="pointer-events-none absolute inset-x-4 top-1 h-4 rounded-full bg-white/20 blur-md" />
+              )}
+              <span className="relative text-base">{sport.emoji}</span>
+              <span className="relative hidden sm:inline">{sport.label}</span>
+              {isActive && (
+                <span className="absolute -bottom-1 left-1/2 h-1.5 w-10 -translate-x-1/2 rounded-full bg-white/75 shadow-sm" />
               )}
             </button>
           );

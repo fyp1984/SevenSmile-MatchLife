@@ -6,6 +6,7 @@ import ShareModal from "../components/ShareModal";
 import type { PlayerShareData } from "../lib/shareCard";
 import { DATA_SOURCE_CONTACT_HINT } from "../lib/dataSourceHints";
 import { listPlayerProfiles, type PlayerProfile } from "../lib/playerProfiles";
+import { fetchSourceLabelByRaceId, resolveTournamentDisplayName } from "../lib/dataSources";
 import { buildDisplayTeam, findPlayerSide, resolveWinnerSide } from "../lib/matchResults";
 
 interface Match {
@@ -196,6 +197,30 @@ export function PlayerCareer() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSourceLabels = async () => {
+      const labels = await fetchSourceLabelByRaceId();
+      if (!cancelled) setSourceLabelByRaceId(labels);
+    };
+
+    void loadSourceLabels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setMatches((current) =>
+      current.map((match) => {
+        const nextName = resolveTournamentDisplayName(match.tournament_name, sourceLabelByRaceId);
+        return nextName === match.tournament_name ? match : { ...match, tournament_name: nextName };
+      }),
+    );
+  }, [sourceLabelByRaceId]);
 
   const historicalTrend = useMemo(() => {
     const monthlyData: Record<string, { wins: number; total: number }> = {};
@@ -430,7 +455,12 @@ export function PlayerCareer() {
           }
         }
 
-        setMatches(playerMatches);
+        setMatches(
+          playerMatches.map((match) => ({
+            ...match,
+            tournament_name: resolveTournamentDisplayName(match.tournament_name, sourceLabelByRaceId),
+          })),
+        );
 
         const totalMatches = playerMatches.length;
         const wins = playerMatches.filter(match => {
@@ -493,7 +523,7 @@ export function PlayerCareer() {
   };
 
   const shareUrl = fullUrl;
-  const shareTitle = `${name} 的生涯数据 - 七笑果 MatchLife`;
+  const shareTitle = `${name} 的生涯数据 - 七笑果-赛事生涯`;
   const shareDesc = `总场次：${stats.totalMatches} | 胜场：${stats.wins} | 胜率：${stats.winRate.toFixed(1)}%`;
 
   return (

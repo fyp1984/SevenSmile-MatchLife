@@ -610,7 +610,7 @@ export default function Stats() {
   } : null;
 
   const shareUrl = fullUrl;
-  const shareTitle = stats ? `${stats.selectedTournament} 赛事看板 - 七笑果 MatchLife` : '赛事看板';
+  const shareTitle = stats ? `${stats.selectedTournament} 赛事看板 - 七笑果-赛事生涯` : '赛事看板';
   const shareDesc = stats ? `总场次：${stats.totalMatches} | 参赛人数：${stats.totalPlayers}` : '查看最新赛事看板';
   const statsAvailabilityLabel = !loadedTournament
     ? '待加载'

@@ -8,6 +8,7 @@ import { useTagStore } from '../stores/tagStore';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 import { getLocalContributorId } from '../lib/localContributor';
+import { fetchSourceLabelByRaceId, resolveTournamentDisplayName } from '../lib/dataSources';
 
 type Match = {
   id: string;
@@ -54,6 +55,29 @@ export default function MatchTagging() {
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [matchError, setMatchError] = useState<string | null>(null);
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSourceLabels = async () => {
+      const labels = await fetchSourceLabelByRaceId();
+      if (!cancelled) setSourceLabelByRaceId(labels);
+    };
+
+    void loadSourceLabels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setMatch((current) => {
+      if (!current) return current;
+      const nextName = resolveTournamentDisplayName(current.tournament_name, sourceLabelByRaceId);
+      return nextName === current.tournament_name ? current : { ...current, tournament_name: nextName };
+    });
+  }, [sourceLabelByRaceId]);
 
   useEffect(() => {
     if (!matchId) return;
@@ -106,7 +130,10 @@ export default function MatchTagging() {
       return false;
     }
 
-    setMatch(data);
+    setMatch({
+      ...(data as Match),
+      tournament_name: resolveTournamentDisplayName((data as Match).tournament_name, sourceLabelByRaceId),
+    });
     return true;
   };
 
