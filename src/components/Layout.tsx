@@ -42,9 +42,6 @@ export default function Layout() {
             <NavLink to="/leaderboard" className={navClassName}>
               排行榜
             </NavLink>
-            <NavLink to="/data-sources" className={navClassName}>
-              数据源
-            </NavLink>
             <NavLink
               to="/sync"
               className={({ isActive }) =>
@@ -55,7 +52,7 @@ export default function Layout() {
                 }`
               }
             >
-              数据状态
+              更新状态
             </NavLink>
             <NavLink to="/guide" className={navClassName} title="查看系统使用文档">
               <span className="inline-flex items-center gap-1.5">
@@ -79,10 +76,8 @@ export default function Layout() {
           <span>·</span>
           <span>文体有料</span>
         </div>
-        <p className="mb-2">数据来源：已接入的公开赛事平台与官方公开页面，后续将持续扩展更多赛事与球类数据源。</p>
-        <p className="max-w-3xl mx-auto text-xs leading-6 text-brand-gray/90">
-          合规说明：本平台仅做赛事数据采集、整理与展示，不对源平台数据的实时性、完整性与准确性作任何承诺；涉及赛果、赛程、比分与排名，请以官方发布信息为准。
-        </p>
+        <p className="mb-2">提供赛事结果、排行与进展查看，方便快速掌握最新比赛信息。</p>
+        <p className="max-w-3xl mx-auto text-xs leading-6 text-brand-gray/90">赛程、比分与名次请以官方发布信息为准。</p>
         <p className="mt-3">© {new Date().getFullYear()} SevenSmile MatchLife. All rights reserved.</p>
       </footer>
     </div>

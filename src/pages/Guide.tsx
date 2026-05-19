@@ -28,7 +28,7 @@ export default function Guide() {
             <li>赛事看板可查看某个赛事的整体进展和项目成绩。</li>
             <li>排行榜可按男女、单打、双打查看选手表现。</li>
             <li>比赛详情页可查看对阵信息、比分和相关比赛。</li>
-            <li>数据源页可维护赛事来源与选手档案。</li>
+            <li>管理员可在后台维护赛事与选手资料。</li>
           </ul>
         </div>
 
@@ -41,8 +41,8 @@ export default function Guide() {
             <li>1. 先在首页输入关键词，快速找到目标比赛或选手。</li>
             <li>2. 如需查看整体情况，可进入“赛事看板”查看统计结果。</li>
             <li>3. 如需查看个人表现，可进入“排行榜”或“选手页”。</li>
-            <li>4. 管理员可在“数据源”页维护赛事来源和选手档案。</li>
-            <li>5. 如页面未更新，可先查看“数据状态”确认同步是否正常。</li>
+            <li>4. 管理员可在后台维护赛事来源和选手资料。</li>
+            <li>5. 如页面未更新，可先查看“更新状态”确认最新结果是否已整理完成。</li>
           </ol>
         </div>
 
@@ -54,8 +54,8 @@ export default function Guide() {
           <ul className="space-y-2 text-sm leading-6 text-brand-gray">
             <li>普通用户可查看首页、看板、排行榜和比赛详情。</li>
             <li>涉及档案编辑、档案删除等管理操作时，需要输入管理员口令。</li>
-            <li>数据源的启停和维护建议由专人负责，避免多人同时改动。</li>
-            <li>后续系统接入统一登录后，当前口令校验会升级为正式权限控制。</li>
+            <li>赛事资料的维护建议由专人负责，避免多人同时改动。</li>
+            <li>后续会进一步升级管理员权限控制。</li>
           </ul>
         </div>
       </section>
@@ -78,13 +78,13 @@ export default function Guide() {
           <div className="rounded-3xl border border-orange-100 bg-white p-5">
             <h3 className="text-base font-extrabold text-brand-brown">维护选手档案</h3>
             <p className="mt-2 text-sm leading-6 text-brand-gray">
-              管理员可在“数据源”页完善头像、俱乐部、教练等信息，让展示页面更完整。
+              管理员可在后台完善头像、俱乐部、教练等信息，让展示页面更完整。
             </p>
           </div>
           <div className="rounded-3xl border border-orange-100 bg-orange-50/40 p-5">
             <h3 className="text-base font-extrabold text-brand-brown">处理异常情况</h3>
             <p className="mt-2 text-sm leading-6 text-brand-gray">
-              若页面未显示最新结果，先查看“数据状态”；若需调整来源或档案，请由有口令的管理员处理。
+              若页面未显示最新结果，先查看“更新状态”；若需调整赛事资料，请由有口令的管理员处理。
             </p>
           </div>
         </div>
