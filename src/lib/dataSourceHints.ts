@@ -9,7 +9,7 @@ const SPORT_LABELS: Record<Sport, string> = {
 };
 
 export const DATA_SOURCE_CONTACT_HINT =
-  '当前未接入数据源，可公众号后台联系平台方接入数据后，即可呈现比赛数据。';
+  '当前还没有可展示的比赛内容，如需补充赛事可联系运营人员更新。';
 
 export function getSportLabel(sport: Sport) {
   return SPORT_LABELS[sport];
@@ -18,5 +18,5 @@ export function getSportLabel(sport: Sport) {
 export function buildUnavailableDataMessage(sport?: Sport | string) {
   if (!sport) return DATA_SOURCE_CONTACT_HINT;
   const label = SPORT_LABELS[sport as Sport] ?? String(sport);
-  return `当前${label}暂未接入数据源，可公众号后台联系平台方接入数据后，即可呈现比赛数据。`;
+  return `${label}内容即将开放，可先查看已经上线的项目。`;
 }
