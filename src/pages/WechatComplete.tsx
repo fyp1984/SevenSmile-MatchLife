@@ -25,9 +25,10 @@ export default function WechatComplete() {
           const json = await res.json().catch(() => ({}));
           if (!res.ok || !json?.ok) {
             if (!cancelled) {
+              const target = json?.redirectToFollow ? '/follow' : `/gate/wechat?next=${encodeURIComponent(next)}`;
               setMessage(json?.error || '链接已失效，正在返回验证页...');
               window.setTimeout(() => {
-                nav(`/gate/wechat?next=${encodeURIComponent(next)}`, { replace: true });
+                nav(target, { replace: true });
               }, 800);
             }
             return;

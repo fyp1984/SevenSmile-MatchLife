@@ -18,6 +18,7 @@ export default function WechatGate() {
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const accessCodeVerifyUrl = `${import.meta.env.BASE_URL}api/wechat/access-code/verify`;
+  const oauthStartUrl = `${import.meta.env.BASE_URL}api/wechat/oauth-start`;
 
   const next = useMemo(() => {
     const params = new URLSearchParams(loc.search);
@@ -29,7 +30,7 @@ export default function WechatGate() {
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">关注验证</h1>
         <p className="text-sm text-brand-gray mb-6">
-          仅限关注“七笑果-文体有料”公众号的用户访问。最佳体验是在公众号内回复关键词“比赛生涯”获取直达链接；如未能直接打开，再使用访问码作为兜底验证。
+          仅限关注“七笑果-文体有料”服务号的用户访问。推荐在微信内直接完成服务号验证；若微信授权异常，再使用直达链接或访问码作为兜底方式进入。
         </p>
 
         {!isWeChat() && !isLocalhost() && (
@@ -47,16 +48,26 @@ export default function WechatGate() {
         <div className="space-y-4">
           <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-brand-gray">
             <div className="font-bold text-brand-brown mb-1">推荐进入方式</div>
-            <div>1. 关注公众号“七笑果-文体有料”</div>
-            <div>2. 回复关键词“比赛生涯”</div>
-            <div>3. 点击公众号返回的直达链接，无需手输访问码</div>
-            <div className="mt-2 text-xs">若链接过期或无法打开，再使用下方访问码输入框兜底进入。</div>
+            <div>1. 在微信中关注服务号“七笑果-文体有料”</div>
+            <div>2. 点击下方“微信内一键进入”完成服务号身份验证</div>
+            <div>3. 若授权异常，可回复关键词“比赛生涯”获取直达链接</div>
+            <div className="mt-2 text-xs">访问码仅作为异常情况下的最后兜底方式。</div>
           </div>
+
+          <button
+            onClick={() => {
+              setError(null);
+              window.location.href = `${oauthStartUrl}?next=${encodeURIComponent(next)}`;
+            }}
+            className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all"
+          >
+            微信内一键进入
+          </button>
 
           <input
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            placeholder="请输入公众号回复的访问码"
+            placeholder="请输入访问码（仅兜底使用）"
             className="w-full px-4 py-3 rounded-2xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
           />
 
@@ -99,7 +110,7 @@ export default function WechatGate() {
             className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all disabled:opacity-60"
             disabled={submitting}
           >
-            {submitting ? '验证中...' : '输入访问码进入'}
+            {submitting ? '验证中...' : '使用访问码兜底进入'}
           </button>
         </div>
       </div>
