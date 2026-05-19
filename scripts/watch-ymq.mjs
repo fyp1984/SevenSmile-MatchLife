@@ -15,10 +15,15 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createSupabaseServiceClient({ url: SUPABASE_URL, serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY });
 
-const raceId = Number(process.argv[2] || 38653);
-const tournamentName =
+const DEFAULT_RACE_ID = Number(process.argv[2] || process.env.SYNC_RACE_ID || 38653);
+const DEFAULT_TOURNAMENT_NAME =
   process.argv.slice(3).join(' ').trim() ||
+  String(process.env.SYNC_TOURNAMENT_NAME || '').trim() ||
   '2026年全国U系列羽毛球比赛U12-14(北方赛区)-单项赛';
+const EXPLICIT_RACE_IDS = String(process.env.SYNC_RACE_IDS || '')
+  .split(',')
+  .map((item) => Number(item.trim()))
+  .filter((n) => Number.isFinite(n) && n > 0);
 
 const DISCOVERY_INTERVAL_MS = Number(process.env.MATCHLIFE_DISCOVERY_INTERVAL_MS || 30_000);
 const ACTIVE_INTERVAL_MS = Number(process.env.MATCHLIFE_ACTIVE_INTERVAL_MS || 1500);
@@ -57,6 +62,67 @@ let netSample = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRaceIdFromSource(rawUrl) {
+  const value = String(rawUrl || '').trim();
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    const fromSearch = u.searchParams.get('game_id') || u.searchParams.get('raceId') || u.searchParams.get('race_id');
+    const hash = (u.hash || '').replace(/^#/, '');
+    let fromHash = '';
+    if (hash.includes('?')) {
+      const query = hash.slice(hash.indexOf('?') + 1);
+      const hp = new URLSearchParams(query);
+      fromHash = hp.get('game_id') || hp.get('raceId') || hp.get('race_id') || '';
+    }
+    const n = Number(fromSearch || fromHash || '');
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function fallbackTargetForRaceId(currentRaceId) {
+  return {
+    raceId: currentRaceId,
+    tournamentName:
+      currentRaceId === DEFAULT_RACE_ID ? DEFAULT_TOURNAMENT_NAME : `${DEFAULT_TOURNAMENT_NAME}#${currentRaceId}`,
+  };
+}
+
+async function resolveSyncTargets() {
+  if (EXPLICIT_RACE_IDS.length > 0) {
+    return Array.from(new Set(EXPLICIT_RACE_IDS)).map((currentRaceId) => fallbackTargetForRaceId(currentRaceId));
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('matchlife_data_sources')
+      .select('name, url, enabled')
+      .eq('enabled', true)
+      .order('updated_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+
+    const targets = [];
+    const seen = new Set();
+    for (const row of data || []) {
+      const currentRaceId = parseRaceIdFromSource(row?.url);
+      if (!currentRaceId || seen.has(currentRaceId)) continue;
+      seen.add(currentRaceId);
+      targets.push({
+        raceId: currentRaceId,
+        tournamentName: String(row?.name || '').trim() || fallbackTargetForRaceId(currentRaceId).tournamentName,
+      });
+    }
+    if (targets.length > 0) return targets;
+  } catch {
+    // Ignore source lookup failures and fall back to the default target.
+  }
+
+  return [fallbackTargetForRaceId(DEFAULT_RACE_ID)];
 }
 
 function toErrorMessage(err) {
@@ -293,40 +359,104 @@ async function emitDeferredHeartbeat(reason, details = {}) {
   await writeHeartbeat(payload);
 }
 
-function updateHotCourts(activeCourts) {
+function updateHotCourts(raceId, tournamentName, activeCourts) {
   const now = Date.now();
   const seen = new Set();
   for (const c of activeCourts || []) {
     const courtNo = Number(c?.courtNo);
     if (!courtNo) continue;
-    seen.add(courtNo);
-    const prev = hotCourts.get(courtNo);
-    hotCourts.set(courtNo, {
+    const key = `${raceId}:${courtNo}`;
+    seen.add(key);
+    const prev = hotCourts.get(key);
+    hotCourts.set(key, {
+      raceId,
+      tournamentName,
+      courtNo,
       lastActiveAt: now,
       maxPage: Math.max(1, Math.min(Number(c?.maxPage || 1), ACTIVE_PAGES)),
       firstSeenAt: prev?.firstSeenAt || now,
     });
   }
-  for (const [courtNo, info] of hotCourts.entries()) {
-    if (seen.has(courtNo)) continue;
+  for (const [key, info] of hotCourts.entries()) {
+    if (seen.has(key)) continue;
     if (now - Number(info?.lastActiveAt || 0) > ACTIVE_IDLE_MS) {
-      hotCourts.delete(courtNo);
+      hotCourts.delete(key);
     }
   }
 }
 
-async function runOnce({ kind, mode, courtNos, maxPages }) {
+async function runOnce({ kind, mode, targets: targetOverrides }) {
   const start = Date.now();
-  const result = await syncOnce({ supabase, raceId, tournamentName, mode, courtNos, maxPages, runKind: kind });
+  const targets = targetOverrides && targetOverrides.length > 0 ? targetOverrides : await resolveSyncTargets();
+  let pulled = 0;
+  let validated = 0;
+  let invalid = 0;
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+  let courts = 0;
+  const activeCourts = [];
+  const sourceResults = [];
+
+  for (const target of targets) {
+    const result = await syncOnce({
+      supabase,
+      raceId: target.raceId,
+      tournamentName: target.tournamentName,
+      mode,
+      courtNos: target.courtNos,
+      maxPages: target.maxPages,
+      runKind: `${kind}_race_${target.raceId}`,
+    });
+    pulled += Number(result?.pulled || 0);
+    validated += Number(result?.validated || 0);
+    invalid += Number(result?.invalid || 0);
+    inserted += Number(result?.inserted || 0);
+    updated += Number(result?.updated || 0);
+    skipped += Number(result?.skipped || 0);
+    courts += Number(result?.courts || 0);
+    updateHotCourts(target.raceId, target.tournamentName, result?.activeCourts);
+    sourceResults.push({
+      raceId: target.raceId,
+      tournamentName: target.tournamentName,
+      pulled: Number(result?.pulled || 0),
+      inserted: Number(result?.inserted || 0),
+      updated: Number(result?.updated || 0),
+      skipped: Number(result?.skipped || 0),
+    });
+    for (const active of result?.activeCourts || []) {
+      activeCourts.push({
+        raceId: target.raceId,
+        tournamentName: target.tournamentName,
+        courtNo: Number(active?.courtNo || 0),
+        maxPage: Number(active?.maxPage || 1),
+      });
+    }
+  }
+
   const seconds = ((Date.now() - start) / 1000).toFixed(2);
-  updateHotCourts(result?.activeCourts);
   const summary = {
-    ...result,
     ok: true,
+    mode,
+    pulled,
+    validated,
+    invalid,
+    inserted,
+    updated,
+    skipped,
+    courts,
+    activeCourts,
+    targetCount: targets.length,
+    sourceResults,
     kind,
     seconds,
     ts: new Date().toISOString(),
-    hotCourts: Array.from(hotCourts.entries()).map(([courtNo, v]) => ({ courtNo, maxPage: v.maxPage })),
+    hotCourts: Array.from(hotCourts.values()).map((item) => ({
+      raceId: item.raceId,
+      tournamentName: item.tournamentName,
+      courtNo: item.courtNo,
+      maxPage: item.maxPage,
+    })),
   };
   return summary;
 }
@@ -480,10 +610,28 @@ async function loop() {
     }
 
     if (hotCourts.size > 0) {
-      const courtNos = Array.from(hotCourts.keys());
-      const maxPages = Math.max(...Array.from(hotCourts.values()).map((v) => Number(v?.maxPage || 1)), 1);
+      const groupedTargets = Array.from(hotCourts.values()).reduce((acc, item) => {
+        const key = String(item.raceId);
+        if (!acc.has(key)) {
+          acc.set(key, {
+            raceId: item.raceId,
+            tournamentName: item.tournamentName || fallbackTargetForRaceId(item.raceId).tournamentName,
+            courtNos: [],
+            maxPages: 1,
+          });
+        }
+        const target = acc.get(key);
+        if (!target) return acc;
+        target.courtNos.push(item.courtNo);
+        target.maxPages = Math.max(target.maxPages, Number(item.maxPage || 1));
+        return acc;
+      }, new Map());
+      const targets = Array.from(groupedTargets.values()).map((target) => ({
+        ...target,
+        courtNos: Array.from(new Set(target.courtNos)).sort((a, b) => a - b),
+      }));
       try {
-        const summary = await runOnce({ kind: 'active', mode: 'full', courtNos, maxPages });
+        const summary = await runOnce({ kind: 'active', mode: 'full', targets });
         await handleSuccess(summary);
         nextErrorRetryAt = 0;
       } catch (err) {

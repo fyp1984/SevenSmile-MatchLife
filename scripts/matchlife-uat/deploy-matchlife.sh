@@ -11,7 +11,9 @@ NGINX_SITE_NAME="${NGINX_SITE_NAME:-${DOMAIN_NAME}.conf}"
 WECHAT_OAUTH_UPSTREAM="${WECHAT_OAUTH_UPSTREAM:-http://127.0.0.1:18765}"
 SUPABASE_REST_UPSTREAM="${SUPABASE_REST_UPSTREAM:-http://175.178.236.183:8000}"
 SUPABASE_REST_HOST_HEADER="${SUPABASE_REST_HOST_HEADER:-175.178.236.183}"
+SUPABASE_REST_KEEPALIVE="${SUPABASE_REST_KEEPALIVE:-64}"
 SYNC_SERVICE_NAME="${SYNC_SERVICE_NAME:-${APP_SLUG}-sync.service}"
+WECHAT_ACCESS_SERVICE_NAME="${WECHAT_ACCESS_SERVICE_NAME:-${APP_SLUG}-wechat-access.service}"
 CERT_BASENAME="${CERT_BASENAME:-${DOMAIN_NAME}}"
 
 APP_PATH="/${APP_PATH#/}"
@@ -19,6 +21,7 @@ APP_PATH="${APP_PATH%/}"
 APP_HOME="/home/${APP_RUN_USER}"
 APP_DIR="${APP_HOME}/apps/${APP_SLUG}"
 NGINX_CONF_PATH="/etc/nginx/conf.d/${NGINX_SITE_NAME}"
+NGINX_UPSTREAM_CONF_PATH="/etc/nginx/conf.d/${APP_SLUG}.supabase-upstream.conf"
 NGINX_SNIPPET_DIR="/etc/nginx/snippets"
 NGINX_MATCHLIFE_SNIPPET="${NGINX_SNIPPET_DIR}/${APP_SLUG}.${DOMAIN_NAME}.locations.conf"
 SSL_DIR="/etc/nginx/ssl"
@@ -27,6 +30,7 @@ RUNTIME_PID="${RUNTIME_DIR}/wechat-access.pid"
 RUNTIME_LOG="${RUNTIME_DIR}/wechat-access.log"
 SYNC_RUNTIME_DIR="${APP_HOME}/release/runtime/${APP_SLUG}-sync"
 SYNC_SERVICE_PATH="/etc/systemd/system/${SYNC_SERVICE_NAME}"
+WECHAT_ACCESS_SERVICE_PATH="/etc/systemd/system/${WECHAT_ACCESS_SERVICE_NAME}"
 
 if [[ ! -d "${REMOTE_STAGE_DIR}/dist" ]]; then
   echo "missing dist in ${REMOTE_STAGE_DIR}" >&2
@@ -84,10 +88,23 @@ sync_owned_file "${REMOTE_STAGE_DIR}/sync-runtime.package.json" "${SYNC_RUNTIME_
 sync_owned_file "${REMOTE_STAGE_DIR}/watch-ymq.mjs" "${SYNC_RUNTIME_DIR}/watch-ymq.mjs"
 sync_owned_file "${REMOTE_STAGE_DIR}/run-sync-once.mjs" "${SYNC_RUNTIME_DIR}/run-sync-once.mjs"
 sync_owned_file "${REMOTE_STAGE_DIR}/lib/ymq-sync.mjs" "${SYNC_RUNTIME_DIR}/lib/ymq-sync.mjs"
+sync_owned_file "${REMOTE_STAGE_DIR}/lib/canonical-match.mjs" "${SYNC_RUNTIME_DIR}/lib/canonical-match.mjs"
 sync_owned_file "${REMOTE_STAGE_DIR}/sync-runtime.env" "${SYNC_RUNTIME_DIR}/.env.runtime"
 sync_owned_file "${REMOTE_STAGE_DIR}/matchlife-sync.service.tpl" "${SYNC_RUNTIME_DIR}/matchlife-sync.service.tpl"
 
 sudo -n chown -R "${APP_RUN_USER}:${APP_RUN_USER}" "${APP_DIR}" "${RUNTIME_DIR}" "${SYNC_RUNTIME_DIR}"
+
+SUPABASE_REST_UPSTREAM_SERVER="${SUPABASE_REST_UPSTREAM#http://}"
+SUPABASE_REST_UPSTREAM_SERVER="${SUPABASE_REST_UPSTREAM_SERVER#https://}"
+SUPABASE_REST_UPSTREAM_SERVER="${SUPABASE_REST_UPSTREAM_SERVER%%/*}"
+SUPABASE_REST_UPSTREAM_NAME="${APP_SLUG}_supabase_rest"
+
+sudo -n tee "${NGINX_UPSTREAM_CONF_PATH}" >/dev/null <<EOF
+upstream ${SUPABASE_REST_UPSTREAM_NAME} {
+    server ${SUPABASE_REST_UPSTREAM_SERVER};
+    keepalive ${SUPABASE_REST_KEEPALIVE};
+}
+EOF
 
 sudo -n install -d "${NGINX_SNIPPET_DIR}"
 sudo -n tee "${NGINX_MATCHLIFE_SNIPPET}" >/dev/null <<EOF
@@ -101,8 +118,13 @@ location ~ ^/(matches|player|stats|leaderboard|data-sources|guide|sync|follow|ga
 
 location ^~ ${APP_PATH}/supabase/ {
     rewrite ^${APP_PATH}/supabase/(.*)$ /\$1 break;
-    proxy_pass ${SUPABASE_REST_UPSTREAM};
+    proxy_pass http://${SUPABASE_REST_UPSTREAM_NAME};
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_socket_keepalive on;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
     proxy_set_header Host ${SUPABASE_REST_HOST_HEADER};
     proxy_set_header X-Forwarded-Host \$host;
     proxy_set_header X-Forwarded-Proto \$scheme;
@@ -165,17 +187,54 @@ PY
 sudo -n nginx -t
 sudo -n systemctl reload nginx || sudo -n service nginx reload
 
-sudo -n -u "${APP_RUN_USER}" bash -lc "
+if [[ -f "${RUNTIME_DIR}/wechat-oauth-server.mjs" && -f "${RUNTIME_DIR}/wechat-access.env" ]]; then
+  sudo -n tee "${WECHAT_ACCESS_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=${APP_SLUG} wechat access service
+After=network.target
+
+[Service]
+Type=simple
+User=${APP_RUN_USER}
+Group=${APP_RUN_USER}
+WorkingDirectory=${RUNTIME_DIR}
+ExecStart=/bin/bash -lc 'set -a && source "${RUNTIME_DIR}/wechat-access.env" && set +a && exec /usr/bin/env node "${RUNTIME_DIR}/wechat-oauth-server.mjs"'
+Restart=always
+RestartSec=3
+StandardOutput=append:${RUNTIME_LOG}
+StandardError=append:${RUNTIME_LOG}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo -n systemctl daemon-reload
+  sudo -n systemctl enable "${WECHAT_ACCESS_SERVICE_NAME}" >/dev/null
+
+  sudo -n -u "${APP_RUN_USER}" bash -lc "
 set -euo pipefail
 if [[ -f '${RUNTIME_PID}' ]] && kill -0 \$(cat '${RUNTIME_PID}') >/dev/null 2>&1; then
   kill \$(cat '${RUNTIME_PID}') >/dev/null 2>&1 || true
-  sleep 1
+  rm -f '${RUNTIME_PID}'
 fi
-if [[ -f '${RUNTIME_DIR}/wechat-oauth-server.mjs' && -f '${RUNTIME_DIR}/wechat-access.env' ]]; then
-  nohup bash -lc \"set -a && source '${RUNTIME_DIR}/wechat-access.env' && set +a && exec node '${RUNTIME_DIR}/wechat-oauth-server.mjs'\" > '${RUNTIME_LOG}' 2>&1 &
-  echo \$! > '${RUNTIME_PID}'
-fi
+pkill -f '${RUNTIME_DIR}/wechat-oauth-server.mjs' >/dev/null 2>&1 || true
 "
+
+  sudo -n systemctl restart "${WECHAT_ACCESS_SERVICE_NAME}"
+
+  for _ in 1 2 3 4 5; do
+    if curl -fsS "http://127.0.0.1:18765/healthz" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  if ! curl -fsS "http://127.0.0.1:18765/healthz" >/dev/null 2>&1; then
+    echo "wechat access service health check failed" >&2
+    sudo -n systemctl status "${WECHAT_ACCESS_SERVICE_NAME}" --no-pager >&2 || true
+    exit 1
+  fi
+fi
 
 if [[ -f "${SYNC_RUNTIME_DIR}/package.json" ]]; then
   sudo -n -u "${APP_RUN_USER}" bash -lc "cd '${SYNC_RUNTIME_DIR}' && npm install --omit=dev >/dev/null 2>&1"

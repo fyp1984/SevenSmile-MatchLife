@@ -8,6 +8,9 @@ DB_NAME="${DB_NAME:-matchlife_supabase}"
 DB_OWNER="${DB_OWNER:-matchlife_owner}"
 DB_AUTH="${DB_AUTH:-authenticator}"
 PGRST_PORT="${PGRST_PORT:-18000}"
+PGRST_DB_POOL="${PGRST_DB_POOL:-60}"
+PGRST_DB_POOL_ACQUIRE_TIMEOUT="${PGRST_DB_POOL_ACQUIRE_TIMEOUT:-5}"
+PGRST_NGINX_KEEPALIVE="${PGRST_NGINX_KEEPALIVE:-128}"
 
 if [[ ! -f "${SECRETS_FILE}" ]]; then
   echo "missing secrets file: ${SECRETS_FILE}" >&2
@@ -65,8 +68,18 @@ ALTER TABLE IF EXISTS public.matches ADD COLUMN IF NOT EXISTS raw JSONB;
 SQL
 
 TMP_MIGRATIONS_DIR="/tmp/matchlife-migrations"
+sudo -n rm -rf "${TMP_MIGRATIONS_DIR}"
 sudo -n install -d -m 755 "${TMP_MIGRATIONS_DIR}"
-sudo -n cp "${MIGRATIONS_DIR}"/*.sql "${TMP_MIGRATIONS_DIR}/"
+
+mapfile -t migration_files < <(find "${MIGRATIONS_DIR}" -type f -name '*.sql' | sort)
+if [[ ${#migration_files[@]} -eq 0 ]]; then
+  echo "no migration sql files found under ${MIGRATIONS_DIR}" >&2
+  exit 1
+fi
+
+for file in "${migration_files[@]}"; do
+  sudo -n cp "${file}" "${TMP_MIGRATIONS_DIR}/$(basename "${file}")"
+done
 sudo -n chmod 644 "${TMP_MIGRATIONS_DIR}"/*.sql
 
 for file in $(ls "${TMP_MIGRATIONS_DIR}"/*.sql | sort); do
@@ -80,6 +93,10 @@ sudo -n tee /etc/postgrest/matchlife.conf >/dev/null <<CFG
 db-uri = "postgres://${DB_AUTH}:${DB_AUTH_PASSWORD}@127.0.0.1:5432/${DB_NAME}"
 db-anon-role = "anon"
 db-schemas = "public"
+db-channel-enabled = true
+db-channel = "pgrst"
+db-pool = ${PGRST_DB_POOL}
+db-pool-acquisition-timeout = ${PGRST_DB_POOL_ACQUIRE_TIMEOUT}
 server-host = "127.0.0.1"
 server-port = ${PGRST_PORT}
 jwt-secret = "${JWT_SECRET_BASE64}"
@@ -108,6 +125,7 @@ UNIT
 sudo -n systemctl daemon-reload
 sudo -n systemctl enable postgrest-matchlife >/dev/null
 sudo -n systemctl restart postgrest-matchlife
+sudo -n -u postgres psql -d "${DB_NAME}" -c "SELECT pg_notify('pgrst', 'reload schema');" >/dev/null
 
 sudo -n install -d /etc/nginx/ssl/matchlife-supabase
 if [[ ! -f /etc/nginx/ssl/matchlife-supabase/ip.crt || ! -f /etc/nginx/ssl/matchlife-supabase/ip.key ]]; then
@@ -116,6 +134,13 @@ if [[ ! -f /etc/nginx/ssl/matchlife-supabase/ip.crt || ! -f /etc/nginx/ssl/match
     -out /etc/nginx/ssl/matchlife-supabase/ip.crt \
     -subj "/CN=175.178.236.183"
 fi
+
+sudo -n tee /etc/nginx/conf.d/matchlife-supabase-upstream.conf >/dev/null <<NGUP
+upstream matchlife_postgrest_local {
+  server 127.0.0.1:${PGRST_PORT};
+  keepalive ${PGRST_NGINX_KEEPALIVE};
+}
+NGUP
 
 sudo -n tee /etc/nginx/conf.d/matchlife-supabase-ip.conf >/dev/null <<NG
 server {
@@ -129,15 +154,25 @@ server {
   if (\$request_method = OPTIONS) { return 204; }
   location ^~ /rest/v1/ {
     rewrite ^/rest/v1/(.*)$ /\$1 break;
-    proxy_pass http://127.0.0.1:${PGRST_PORT};
+    proxy_pass http://matchlife_postgrest_local;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_socket_keepalive on;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
     proxy_set_header Host \$host;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
   }
   location / {
-    proxy_pass http://127.0.0.1:${PGRST_PORT};
+    proxy_pass http://matchlife_postgrest_local;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_socket_keepalive on;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
     proxy_set_header Host \$host;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
@@ -157,15 +192,25 @@ server {
   if (\$request_method = OPTIONS) { return 204; }
   location ^~ /rest/v1/ {
     rewrite ^/rest/v1/(.*)$ /\$1 break;
-    proxy_pass http://127.0.0.1:${PGRST_PORT};
+    proxy_pass http://matchlife_postgrest_local;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_socket_keepalive on;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
     proxy_set_header Host \$host;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
   }
   location / {
-    proxy_pass http://127.0.0.1:${PGRST_PORT};
+    proxy_pass http://matchlife_postgrest_local;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_socket_keepalive on;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
     proxy_set_header Host \$host;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;

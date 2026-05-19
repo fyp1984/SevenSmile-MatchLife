@@ -4,9 +4,15 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 import dotenv from 'dotenv';
 
+type ResetResult = {
+  resetApplied: boolean;
+  warning: string | null;
+};
+
 type YmqSyncModule = {
   createSupabaseServiceClient: (args: { url: string; serviceRoleKey: string }) => unknown;
   resetDb: (args: { supabase: unknown }) => Promise<void>;
+  attemptResetDb: (args: { supabase: unknown }) => Promise<ResetResult>;
   syncOnce: (args: {
     supabase: unknown;
     raceId: number;
@@ -134,10 +140,10 @@ export default defineConfig(({ mode }) => {
                 return;
               }
               const mod = (await import('./scripts/lib/ymq-sync.mjs')) as unknown as YmqSyncModule;
-              await mod.resetDb({ supabase });
+              const resetResult = await mod.attemptResetDb({ supabase });
               res.statusCode = 200;
               res.setHeader('content-type', 'application/json');
-              res.end(JSON.stringify({ ok: true }));
+              res.end(JSON.stringify({ ok: true, ...resetResult }));
             })().catch((e) => {
               res.statusCode = 500;
               res.setHeader('content-type', 'application/json');

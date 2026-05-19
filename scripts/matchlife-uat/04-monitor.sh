@@ -12,6 +12,10 @@ SYNC_RUNTIME_DIR="${SYNC_RUNTIME_DIR:-/home/${APP_RUN_USER}/release/runtime/${AP
 SYNC_HEARTBEAT_FILE="${SYNC_HEARTBEAT_FILE:-${SYNC_RUNTIME_DIR}/heartbeat.json}"
 SYNC_HEARTBEAT_MAX_AGE_SECONDS="${SYNC_HEARTBEAT_MAX_AGE_SECONDS:-600}"
 EXPECT_HTTP_DIAG_HEADER="${EXPECT_HTTP_DIAG_HEADER:-false}"
+SUPABASE_PROXY_URL="${SUPABASE_PROXY_URL:-}"
+SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
+OBS_REQUIRE_RPC="${OBS_REQUIRE_RPC:-false}"
+OBS_ENFORCE_HEALTH="${OBS_ENFORCE_HEALTH:-false}"
 
 URL=""
 APP_PATH="/${APP_PATH#/}"
@@ -112,3 +116,56 @@ print(f\"heartbeat ok: age={age:.0f}s kind={data.get('kind')} ok={data.get('ok')
 PY"
 )"
 echo "${HEARTBEAT_STATUS}"
+
+if [[ -n "${SUPABASE_PROXY_URL}" && -n "${SUPABASE_ANON_KEY}" ]]; then
+  OBS_STATUS="$(
+    python3 - "${SUPABASE_PROXY_URL}" "${SUPABASE_ANON_KEY}" "${OBS_ENFORCE_HEALTH}" <<'PY'
+import json
+import sys
+import urllib.request
+
+base_url = sys.argv[1].rstrip('/')
+anon_key = sys.argv[2]
+enforce_health = sys.argv[3].lower() == 'true'
+
+req = urllib.request.Request(
+    f"{base_url}/rest/v1/rpc/matchlife_get_observability_snapshot",
+    data=json.dumps({
+        "p_recent_run_limit": 5,
+        "p_paused_scope_limit": 5,
+        "p_alert_limit": 8,
+        "p_source_limit": 8,
+    }).encode("utf-8"),
+    headers={
+        "apikey": anon_key,
+        "Authorization": f"Bearer {anon_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    },
+    method="POST",
+)
+
+with urllib.request.urlopen(req, timeout=12) as response:
+    body = json.loads(response.read().decode("utf-8"))
+
+summary = body.get("summary") or {}
+overall = summary.get("overallStatus", "unknown")
+runtime = summary.get("runtimeStatus", "unknown")
+paused = summary.get("pausedScopeCount", 0)
+critical = summary.get("criticalAlertCount", 0)
+warning = summary.get("warningAlertCount", 0)
+
+if enforce_health and overall == "critical":
+    raise SystemExit("observability rpc critical")
+
+print(
+    f"observability rpc ok: overall={overall} runtime={runtime} "
+    f"pausedScopes={paused} criticalAlerts={critical} warningAlerts={warning}"
+)
+PY
+  )"
+  echo "${OBS_STATUS}"
+elif [[ "${OBS_REQUIRE_RPC}" == "true" ]]; then
+  echo "observability rpc skipped: missing SUPABASE_PROXY_URL or SUPABASE_ANON_KEY" >&2
+  exit 1
+fi

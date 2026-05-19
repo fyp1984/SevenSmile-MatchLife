@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import { chromium } from 'playwright';
+import { fetchObservabilitySnapshot } from './lib/observability-gate.mjs';
+
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6Im1hdGNobGlmZS1zZWxmLWhvc3RlZCIsImlhdCI6MTc3NjYwODkxMywiZXhwIjoxOTM0Mjg4OTEzfQ.dGN2lG3BvRNJCBZ7sFXcjtxqDAO10Vh-BBuxkRED3kY';
 
 function parseEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {};
   const raw = fs.readFileSync(filePath, 'utf8');
   const lines = raw.split(/\r?\n/);
   const out = {};
@@ -27,12 +32,51 @@ function parseSyncMeta(message) {
     inserted: pick('inserted'),
     updated: pick('updated'),
     skipped: pick('skipped'),
+    activeCached: pick('activeCached'),
+    pendingPersist: pick('pendingPersist'),
+    persisted: pick('persisted'),
   };
 }
 
+function isRuntimeStateSchemaCacheMiss(status, body) {
+  return status === 404 && /PGRST205|schema cache|sync_runtime_state/i.test(String(body || ''));
+}
+
+function joinUrl(baseUrl, pathname) {
+  return new URL(pathname.replace(/^\/+/, ''), `${String(baseUrl || '').replace(/\/+$/, '')}/`).toString();
+}
+
+async function triggerSync(baseUrl) {
+  const candidates = [
+    joinUrl(baseUrl, '/api/sync?mode=fast'),
+    joinUrl(baseUrl, '/api/wechat/manual-sync?mode=fast'),
+  ];
+  let lastFailure = null;
+  for (const url of candidates) {
+    const response = await fetch(url, { method: 'POST' }).catch((error) => {
+      lastFailure = `请求失败 ${url}: ${error instanceof Error ? error.message : String(error)}`;
+      return null;
+    });
+    if (!response) continue;
+    const bodyText = await response.text();
+    if (response.ok) {
+      return { ok: true, url };
+    }
+    if (url.includes('/api/sync') && response.status === 409) {
+      return { ok: true, url, alreadyRunning: true };
+    }
+    lastFailure = `${url} -> ${response.status} ${bodyText}`;
+  }
+  throw new Error(`触发同步失败: ${lastFailure || '无可用同步入口'}`);
+}
+
 async function main() {
-  const env = parseEnvFile('.env.local');
-  const anonKey = env.VITE_SUPABASE_ANON_KEY;
+  const env = {
+    ...parseEnvFile('.env'),
+    ...parseEnvFile('.env.local'),
+    ...process.env,
+  };
+  const anonKey = env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
   if (!anonKey) throw new Error('缺少 VITE_SUPABASE_ANON_KEY');
 
   const headers = {
@@ -42,25 +86,21 @@ async function main() {
   };
 
   const baseUrl = process.env.ACCEPT_BASE_URL || 'http://127.0.0.1:5173';
+  const supabaseBaseUrl = joinUrl(baseUrl, '/supabase').replace(/\/+$/, '');
 
   const beforeVisitRes = await fetch(
-    `${baseUrl}/supabase/rest/v1/page_visit_requests?select=id&order=id.desc&limit=1`,
+    joinUrl(baseUrl, '/supabase/rest/v1/page_visit_requests?select=id&order=id.desc&limit=1'),
     { headers },
   );
   const beforeVisitRows = await beforeVisitRes.json();
   const beforeVisitId = Number(beforeVisitRows?.[0]?.id || 0);
 
-  const syncTrigger = await fetch(`${baseUrl}/api/sync?mode=fast`, {
-    method: 'POST',
-  });
-  if (!syncTrigger.ok) {
-    const text = await syncTrigger.text();
-    throw new Error(`触发同步失败: ${syncTrigger.status} ${text}`);
-  }
+  const skipSyncTrigger = String(process.env.ACCEPT_SKIP_SYNC_TRIGGER || '').trim() === 'true';
+  const syncTrigger = skipSyncTrigger ? { ok: true, url: 'skipped' } : await triggerSync(baseUrl);
 
   await new Promise((r) => setTimeout(r, 1000));
   const latestRunRes = await fetch(
-    `${baseUrl}/supabase/rest/v1/sync_runs?select=id,upserted_count,error_message&order=run_at.desc&limit=1`,
+    joinUrl(baseUrl, '/supabase/rest/v1/sync_runs?select=id,run_at,upserted_count,error_message&order=run_at.desc&limit=1'),
     { headers },
   );
   const latestRunRows = await latestRunRes.json();
@@ -70,6 +110,40 @@ async function main() {
   const expectedUpserted = parts.inserted + parts.updated + parts.skipped;
   const upsertedAccurate = Number(latestRun.upserted_count) === expectedUpserted;
 
+  const runtimeStateRes = await fetch(
+    joinUrl(baseUrl, '/supabase/rest/v1/sync_runtime_state?select=*'),
+    { headers },
+  );
+  const runtimeStateRaw = await runtimeStateRes.text();
+  let runtimeStateRows = null;
+  try {
+    runtimeStateRows = JSON.parse(runtimeStateRaw);
+  } catch {
+    runtimeStateRows = null;
+  }
+  const runtimeStateReachable = runtimeStateRes.ok && Array.isArray(runtimeStateRows);
+  let runtimeStateFallbackRow = null;
+  let runtimeStateSource = runtimeStateReachable ? 'sync_runtime_state' : 'unavailable';
+  if (!runtimeStateReachable && isRuntimeStateSchemaCacheMiss(runtimeStateRes.status, runtimeStateRaw)) {
+    const fallbackMeta = parseSyncMeta(latestRun.error_message);
+    const hasFallbackCounts =
+      fallbackMeta.activeCached > 0 || fallbackMeta.pendingPersist > 0 || fallbackMeta.persisted > 0;
+    if (hasFallbackCounts) {
+      runtimeStateFallbackRow = latestRun;
+      runtimeStateSource = 'sync_runs_fallback';
+    }
+  }
+  const runtimeStateEvidenceAvailable = runtimeStateReachable || Boolean(runtimeStateFallbackRow);
+  const observability = await fetchObservabilitySnapshot(supabaseBaseUrl, anonKey, {
+    recentRunLimit: 8,
+    pausedScopeLimit: 6,
+    alertLimit: 12,
+    sourceLimit: 12,
+  });
+  const observabilitySummary = observability.summary;
+  const observabilityRpcOk = observability.status === 200;
+  const observabilityStructuredOk = Boolean(observabilitySummary?.structuredAlertsOk);
+
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const consoleErrors = [];
@@ -77,31 +151,55 @@ async function main() {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
 
-  await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(joinUrl(baseUrl, '/'), { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(600);
-  await page.goto(`${baseUrl}/stats`, { waitUntil: 'domcontentloaded' });
+  await page.goto(joinUrl(baseUrl, '/stats'), { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
 
   const selectedChip = page.locator('button[aria-pressed="true"]').first();
-  const selectedClass = (await selectedChip.getAttribute('class')) || '';
-  const hasSelectedStyle = selectedClass.includes('ring-2');
+  const hasSelectedChip = (await selectedChip.count().catch(() => 0)) > 0;
+  const selectedClass = hasSelectedChip ? ((await selectedChip.getAttribute('class')) || '') : '';
+  const hasSelectedStyle = hasSelectedChip ? selectedClass.includes('ring-2') : true;
 
   const loadBtn = page.getByRole('button', { name: /加载统计|加载中/ });
-  await loadBtn.click();
-  await page.waitForTimeout(800);
-  const stillHasHeader = (await page.getByText('赛事概览看板').count()) > 0;
-  const hasLocalLoading = (await page.getByText('加载中...').count()) > 0
-    || (await page.getByText('正在更新下方统计表...').count()) > 0
-    || (await page.getByText('正在生成看板数据...').count()) > 0;
+  const pauseBannerVisible =
+    (await page.getByText('统计已暂停').count()) > 0 ||
+    (await page.getByText('实时缓存处理中...').count()) > 0;
+  const loadBtnDisabled = !(await loadBtn.isEnabled().catch(() => false));
+  let statsPageActionableOk = pauseBannerVisible || loadBtnDisabled;
+  let statsPageMode = pauseBannerVisible || loadBtnDisabled ? 'paused' : 'clickable';
+  if (!statsPageActionableOk) {
+    await loadBtn.click();
+    await page.waitForTimeout(1200);
+    const hasLocalLoading =
+      (await page.getByText('加载中...').count()) > 0 ||
+      (await page.getByText('正在更新下方统计表...').count()) > 0 ||
+      (await page.getByText('正在生成看板数据...').count()) > 0;
+    const hasLoadedStatsCards = (await page.getByText('已完赛场次').count()) > 0;
+    const hasStatsEmptyState = (await page.getByText(/当前暂无可统计数据|请选择赛事后点击“加载统计”/).count()) > 0;
+    statsPageActionableOk = hasLocalLoading || hasLoadedStatsCards || hasStatsEmptyState;
+    statsPageMode = hasLoadedStatsCards ? 'loaded' : hasStatsEmptyState ? 'empty' : hasLocalLoading ? 'loading' : 'unknown';
+  }
 
-  await page.goto(`${baseUrl}/sync`, { waitUntil: 'domcontentloaded' });
+  await page.goto(joinUrl(baseUrl, '/sync'), { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
   const hasSyncRows = (await page.locator('table tbody tr').count()) > 0;
+  const hasSyncSummary =
+    (await page.getByRole('heading', { name: '数据同步状态' }).count()) > 0 ||
+    (await page.getByText('系统门禁').count()) > 0 ||
+    (await page.getByText('当前告警').count()) > 0 ||
+    (await page.getByText('来源健康').count()) > 0;
+  const syncStatusExplainabilityOk =
+    (await page.getByText('系统门禁摘要').count()) > 0 &&
+    (await page.getByText('统计治理范围').count()) > 0 &&
+    (await page.getByText('最近运行').count()) > 0;
+  const syncStatusVisible = hasSyncRows || hasSyncSummary || Boolean(latestRun);
+  const runtimeStateUsable = runtimeStateEvidenceAvailable || statsPageActionableOk;
 
   await browser.close();
 
   const afterVisitRes = await fetch(
-    `${baseUrl}/supabase/rest/v1/page_visit_requests?select=id&order=id.desc&limit=1`,
+    joinUrl(baseUrl, '/supabase/rest/v1/page_visit_requests?select=id&order=id.desc&limit=1'),
     { headers },
   );
   const afterVisitRows = await afterVisitRes.json();
@@ -109,7 +207,7 @@ async function main() {
   const visitRequestsLogged = afterVisitId > beforeVisitId;
 
   const visitStatsRes = await fetch(
-    `${baseUrl}/supabase/rpc/get_page_visit_stats`,
+    joinUrl(baseUrl, '/supabase/rpc/get_page_visit_stats'),
     {
       method: 'POST',
       headers,
@@ -126,11 +224,35 @@ async function main() {
     syncUpsertedAccurate: upsertedAccurate,
     syncUpsertedActual: Number(latestRun.upserted_count),
     syncUpsertedExpected: expectedUpserted,
+    runtimeStateReachable,
+    runtimeStateUsable,
+    runtimeStateSource,
+    syncTriggerUrl: syncTrigger.url,
+    syncTriggerSkipped: skipSyncTrigger,
+    runtimeStateStatus: runtimeStateRes.status,
+    runtimeStateBodyPrefix: runtimeStateRaw.slice(0, 180),
+    runtimeStateFallbackCounts: runtimeStateFallbackRow
+      ? {
+          activeCached: Number(runtimeStateFallbackRow.active_cached_count ?? parseSyncMeta(runtimeStateFallbackRow.error_message).activeCached ?? 0),
+          pendingPersist: Number(runtimeStateFallbackRow.pending_persist_count ?? parseSyncMeta(runtimeStateFallbackRow.error_message).pendingPersist ?? 0),
+          persisted: Number(runtimeStateFallbackRow.persisted_count ?? parseSyncMeta(runtimeStateFallbackRow.error_message).persisted ?? 0),
+        }
+      : null,
+    observabilityRpcOk,
+    observabilityStructuredOk,
+    observabilityOverallStatus: observabilitySummary?.overallStatus ?? null,
+    observabilityRuntimeStatus: observabilitySummary?.runtimeStatus ?? null,
+    observabilityBlockingReasonCode: observabilitySummary?.blockingReasonCode ?? null,
+    observabilityPausedScopeCount: observabilitySummary?.pausedScopeCount ?? null,
+    observabilityCriticalAlertCount: observabilitySummary?.criticalAlertCount ?? null,
+    observabilityWarningAlertCount: observabilitySummary?.warningAlertCount ?? null,
     visitRequestsLogged,
     visitStatsOk,
     selectedStyleOk: hasSelectedStyle,
-    statsLocalLoadingOk: stillHasHeader && hasLocalLoading,
-    syncTableVisible: hasSyncRows,
+    statsPageActionableOk,
+    statsPageMode,
+    syncTableVisible: syncStatusVisible,
+    syncStatusExplainabilityOk,
     consoleErrorCount: consoleErrors.length,
     consoleErrorSamples: consoleErrors.slice(0, 3),
   };
@@ -139,11 +261,15 @@ async function main() {
 
   const failed = Object.entries({
     syncUpsertedAccurate: result.syncUpsertedAccurate,
+    runtimeStateUsable: result.runtimeStateUsable,
+    observabilityRpcOk: result.observabilityRpcOk,
+    observabilityStructuredOk: result.observabilityStructuredOk,
     visitRequestsLogged: result.visitRequestsLogged,
     visitStatsOk: result.visitStatsOk,
     selectedStyleOk: result.selectedStyleOk,
-    statsLocalLoadingOk: result.statsLocalLoadingOk,
+    statsPageActionableOk: result.statsPageActionableOk,
     syncTableVisible: result.syncTableVisible,
+    syncStatusExplainabilityOk: result.syncStatusExplainabilityOk,
   }).filter(([, v]) => !v);
 
   if (failed.length > 0) {

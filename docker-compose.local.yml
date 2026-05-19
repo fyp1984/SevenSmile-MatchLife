@@ -41,6 +41,7 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:-http://175.178.236.183:8000}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       SYNC_RACE_ID: ${SYNC_RACE_ID:-38653}
+      SYNC_RACE_IDS: ${SYNC_RACE_IDS:-}
       SYNC_TOURNAMENT_NAME: ${SYNC_TOURNAMENT_NAME:-2026年全国U系列羽毛球比赛U12-14(北方赛区)-单项赛}
     volumes:
       - matchlife-runtime-state:/runtime-state
@@ -80,6 +81,7 @@ services:
       MATCHLIFE_PAUSED_HEARTBEAT_INTERVAL_MS: ${MATCHLIFE_PAUSED_HEARTBEAT_INTERVAL_MS:-300000}
       YMQ_HTTP_TIMEOUT_MS: ${YMQ_HTTP_TIMEOUT_MS:-12000}
       SYNC_RACE_ID: ${SYNC_RACE_ID:-38653}
+      SYNC_RACE_IDS: ${SYNC_RACE_IDS:-}
       SYNC_TOURNAMENT_NAME: ${SYNC_TOURNAMENT_NAME:-2026年全国U系列羽毛球比赛U12-14(北方赛区)-单项赛}
     volumes:
       - matchlife-runtime-state:/runtime-state

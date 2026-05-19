@@ -18,6 +18,9 @@ server {
         rewrite ^${APP_PATH}/supabase/(.*)$ /$1 break;
         proxy_pass ${SUPABASE_REST_UPSTREAM};
         proxy_http_version 1.1;
+        proxy_connect_timeout 15s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
         proxy_set_header Host ${SUPABASE_REST_HOST_HEADER};
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -26,7 +29,9 @@ server {
     }
 
     location ^~ ${APP_PATH}/api/ {
-        proxy_pass http://wechat-access:18765;
+        resolver 127.0.0.11 ipv6=off valid=30s;
+        set $wechat_access_upstream http://wechat-access:18765;
+        proxy_pass $wechat_access_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Host $host;
