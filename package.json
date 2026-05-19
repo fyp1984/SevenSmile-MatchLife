@@ -66,6 +66,7 @@
     "vite": "^6.3.5",
     "vite-plugin-trae-solo-badge": "^1.0.0",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "ws": "^8.18.3"
   }
 }

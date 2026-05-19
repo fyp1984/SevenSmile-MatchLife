@@ -1,4 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
+import { createRequire } from 'node:module';
+
+function getNodeWebSocketTransport() {
+  if (typeof globalThis.WebSocket !== 'undefined') {
+    return globalThis.WebSocket;
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const transport = require('ws');
+    globalThis.WebSocket = transport;
+    return transport;
+  } catch {
+    return undefined;
+  }
+}
 import crypto from 'crypto';
 import { buildCanonicalMatchRecord } from './canonical-match.mjs';
 
@@ -217,7 +232,9 @@ async function postJson(url, payload) {
 }
 
 export function createSupabaseServiceClient({ url, serviceRoleKey }) {
-  return createClient(url, serviceRoleKey);
+  const transport = getNodeWebSocketTransport();
+  const options = transport ? { realtime: { transport } } : undefined;
+  return createClient(url, serviceRoleKey, options);
 }
 
 function getResetDbErrorMessage(error) {

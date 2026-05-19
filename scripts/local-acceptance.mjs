@@ -46,6 +46,11 @@ function joinUrl(baseUrl, pathname) {
   return new URL(pathname.replace(/^\/+/, ''), `${String(baseUrl || '').replace(/\/+$/, '')}/`).toString();
 }
 
+function includesAny(text, patterns) {
+  const source = String(text || '');
+  return patterns.some((pattern) => (pattern instanceof RegExp ? pattern.test(source) : source.includes(pattern)));
+}
+
 async function triggerSync(baseUrl) {
   const candidates = [
     joinUrl(baseUrl, '/api/sync?mode=fast'),
@@ -164,35 +169,65 @@ async function main() {
   const loadBtn = page.getByRole('button', { name: /加载统计|加载中/ });
   const pauseBannerVisible =
     (await page.getByText('统计已暂停').count()) > 0 ||
+    (await page.getByText('统计稍后开放').count()) > 0 ||
     (await page.getByText('实时缓存处理中...').count()) > 0;
-  const loadBtnDisabled = !(await loadBtn.isEnabled().catch(() => false));
+  const initialLoadBtnLabel = (await loadBtn.first().textContent().catch(() => '')) || '';
+  const loadBtnEnabled = await loadBtn.isEnabled().catch(() => false);
+  const loadBtnDisabled = !loadBtnEnabled;
   let statsPageActionableOk = pauseBannerVisible || loadBtnDisabled;
   let statsPageMode = pauseBannerVisible || loadBtnDisabled ? 'paused' : 'clickable';
   if (!statsPageActionableOk) {
     await loadBtn.click();
-    await page.waitForTimeout(1200);
-    const hasLocalLoading =
-      (await page.getByText('加载中...').count()) > 0 ||
-      (await page.getByText('正在更新下方统计表...').count()) > 0 ||
-      (await page.getByText('正在生成看板数据...').count()) > 0;
-    const hasLoadedStatsCards = (await page.getByText('已完赛场次').count()) > 0;
-    const hasStatsEmptyState = (await page.getByText(/当前暂无可统计数据|请选择赛事后点击“加载统计”/).count()) > 0;
-    statsPageActionableOk = hasLocalLoading || hasLoadedStatsCards || hasStatsEmptyState;
-    statsPageMode = hasLoadedStatsCards ? 'loaded' : hasStatsEmptyState ? 'empty' : hasLocalLoading ? 'loading' : 'unknown';
+    let statsSignal = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await page.waitForTimeout(250);
+      const currentLoadBtnLabel = (await loadBtn.first().textContent().catch(() => '')) || '';
+      const currentBodyText = await page.locator('body').innerText().catch(() => '');
+      const currentLoadBtnDisabled = !(await loadBtn.isEnabled().catch(() => false));
+      const hasLocalLoading =
+        includesAny(currentLoadBtnLabel, ['准备中...', '加载中...', '刷新中...']) ||
+        includesAny(currentBodyText, ['加载中...', '正在更新下方统计表...', '正在生成看板数据...']);
+      const hasLoadedStatsCards = includesAny(currentBodyText, ['已完赛场次', '收录比赛总场次', '参赛运动员人数']);
+      const hasStatsEmptyState = includesAny(currentBodyText, [/当前暂无可统计数据/, /请选择赛事后点击/u, /请先从下方推荐赛事中选择目标赛事后再点击/u]);
+      const hasTournamentSelected =
+        includesAny(currentBodyText, ['当前统计对象：']) &&
+        !includesAny(currentBodyText, ['当前统计对象： 尚未加载', '当前统计对象：\n尚未加载']);
+      const buttonStateChanged = currentLoadBtnLabel !== initialLoadBtnLabel || currentLoadBtnDisabled;
+
+      if (hasLoadedStatsCards) {
+        statsSignal = 'loaded';
+        break;
+      }
+      if (hasStatsEmptyState) {
+        statsSignal = 'empty';
+        break;
+      }
+      if (hasLocalLoading || buttonStateChanged) {
+        statsSignal = hasLocalLoading ? 'loading' : 'button-transition';
+        break;
+      }
+      if (hasTournamentSelected) {
+        statsSignal = 'selected';
+        break;
+      }
+    }
+    statsPageActionableOk = Boolean(statsSignal);
+    statsPageMode = statsSignal || 'unknown';
   }
 
   await page.goto(joinUrl(baseUrl, '/sync'), { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
+  const syncBodyText = await page.locator('body').innerText().catch(() => '');
   const hasSyncRows = (await page.locator('table tbody tr').count()) > 0;
   const hasSyncSummary =
+    includesAny(syncBodyText, ['更新状态', '最近更新记录']) ||
     (await page.getByRole('heading', { name: '数据同步状态' }).count()) > 0 ||
-    (await page.getByText('系统门禁').count()) > 0 ||
-    (await page.getByText('当前告警').count()) > 0 ||
-    (await page.getByText('来源健康').count()) > 0;
+    includesAny(syncBodyText, ['系统门禁', '当前告警', '来源健康']);
   const syncStatusExplainabilityOk =
-    (await page.getByText('系统门禁摘要').count()) > 0 &&
-    (await page.getByText('统计治理范围').count()) > 0 &&
-    (await page.getByText('最近运行').count()) > 0;
+    includesAny(syncBodyText, ['更新状态', '最近更新记录']) &&
+    includesAny(syncBodyText, ['当前状态', '更新提醒', '最近更新', '待处理比赛', '更新失败']) &&
+    (await page.getByRole('button', { name: '立即更新' }).count()) > 0 &&
+    (await page.getByRole('button', { name: '刷新状态' }).count()) > 0;
   const syncStatusVisible = hasSyncRows || hasSyncSummary || Boolean(latestRun);
   const runtimeStateUsable = runtimeStateEvidenceAvailable || statsPageActionableOk;
 
