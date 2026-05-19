@@ -43,6 +43,7 @@ MATCHLIFE_ERROR_BACKOFF_BASE_MS="${MATCHLIFE_ERROR_BACKOFF_BASE_MS:-5000}"
 MATCHLIFE_ERROR_BACKOFF_MAX_MS="${MATCHLIFE_ERROR_BACKOFF_MAX_MS:-120000}"
 YMQ_HTTP_TIMEOUT_MS="${YMQ_HTTP_TIMEOUT_MS:-12000}"
 SYNC_RACE_ID="${SYNC_RACE_ID:-38653}"
+SYNC_RACE_IDS="${SYNC_RACE_IDS:-}"
 SYNC_TOURNAMENT_NAME="${SYNC_TOURNAMENT_NAME:-2026年全国U系列羽毛球比赛U12-14(北方赛区)-单项赛}"
 if [[ -f "${PROJECT_ROOT}/.env.local" ]]; then
   set -a
@@ -74,6 +75,7 @@ scp -P "${SERVER_SSH_PORT}" "${PROJECT_ROOT}/scripts/matchlife-uat/systemd/match
 scp -P "${SERVER_SSH_PORT}" "${PROJECT_ROOT}/scripts/watch-ymq.mjs" "${REMOTE_USER}@${SERVER_IP}:${REMOTE_STAGE_DIR}/watch-ymq.mjs"
 ssh_cmd "mkdir -p '${REMOTE_STAGE_DIR}/lib'"
 scp -P "${SERVER_SSH_PORT}" "${PROJECT_ROOT}/scripts/lib/ymq-sync.mjs" "${REMOTE_USER}@${SERVER_IP}:${REMOTE_STAGE_DIR}/lib/ymq-sync.mjs"
+scp -P "${SERVER_SSH_PORT}" "${PROJECT_ROOT}/scripts/lib/canonical-match.mjs" "${REMOTE_USER}@${SERVER_IP}:${REMOTE_STAGE_DIR}/lib/canonical-match.mjs"
 if [[ -n "${CERT_DIR}" && -f "${CERT_DIR}/${CERT_BASENAME}_bundle.pem" && -f "${CERT_DIR}/${CERT_BASENAME}.key" ]]; then
   scp -P "${SERVER_SSH_PORT}" "${CERT_DIR}/${CERT_BASENAME}_bundle.pem" "${CERT_DIR}/${CERT_BASENAME}.key" "${REMOTE_USER}@${SERVER_IP}:${REMOTE_STAGE_DIR}/"
 fi
@@ -137,6 +139,7 @@ content = "\n".join([
     f"MATCHLIFE_AUTO_PAUSE_ERROR_MS={shlex.quote(os.getenv('MATCHLIFE_AUTO_PAUSE_ERROR_MS', '86400000'))}",
     f"MATCHLIFE_PAUSED_HEARTBEAT_INTERVAL_MS={shlex.quote(os.getenv('MATCHLIFE_PAUSED_HEARTBEAT_INTERVAL_MS', '300000'))}",
     f"SYNC_RACE_ID={shlex.quote(os.getenv('SYNC_RACE_ID', '38653'))}",
+    f"SYNC_RACE_IDS={shlex.quote(os.getenv('SYNC_RACE_IDS', ''))}",
     f"SYNC_TOURNAMENT_NAME={shlex.quote(os.getenv('SYNC_TOURNAMENT_NAME', '2026年全国U系列羽毛球比赛U12-14(北方赛区)-单项赛'))}",
 ])
 path = Path('/tmp/matchlife-sync-runtime.env')

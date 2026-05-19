@@ -19,8 +19,11 @@
     "test:coverage": "vitest run --coverage",
     "sync:ymq": "node scripts/sync-ymq-full.mjs",
     "sync:ymq:watch": "node scripts/watch-ymq.mjs",
+    "sync:orchestrator": "node scripts/run-source-orchestrator.mjs",
     "reset:db": "node scripts/reset-db.mjs",
-    "diag:supabase": "node scripts/check-supabase-connectivity.mjs"
+    "diag:supabase": "node scripts/check-supabase-connectivity.mjs",
+    "gate:observability": "node scripts/task-e-observability-gate.mjs",
+    "bench:read-model": "node scripts/read-model-bench.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.0",

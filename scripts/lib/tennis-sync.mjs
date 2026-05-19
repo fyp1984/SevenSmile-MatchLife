@@ -1,11 +1,20 @@
 import fs from 'node:fs/promises';
 import crypto from 'crypto';
+import { buildCanonicalMatchRecord } from './canonical-match.mjs';
 
 function sha1(value) {
   return crypto.createHash('sha1').update(value).digest('hex');
 }
 
-export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode = 'full', runKind }) {
+export async function syncTennisOnce({
+  supabase,
+  sourceUrl,
+  tournamentName,
+  mode = 'full',
+  runKind,
+  syncRunMeta,
+  sourcePriority = 100,
+}) {
   // Fetch data from local json file or http endpoint
   let rawData;
   try {
@@ -59,9 +68,9 @@ export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode
 
     const rawHash = sha1(JSON.stringify(row));
 
-    records.push({
+    records.push(buildCanonicalMatchRecord({
       source: 'tennis-json',
-      ymq_match_id: `tennis:${row.id}`,
+      source_match_id: `tennis:${row.id}`,
       category: row.category || 'Open',
       tournament_name: tournamentName || row.tournamentName || 'Tennis Match',
       start_time: startTime,
@@ -84,7 +93,9 @@ export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode
       age_years: null,
       item_name: row.category || null,
       event_key: row.category || null,
-    });
+    }, {
+      sourcePriority,
+    }));
   }
 
   // Avoid oversized request bodies through nginx/proxy by chunking RPC writes.
@@ -99,18 +110,34 @@ export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode
     return out;
   }
 
-  let inserted = 0;
-  let updated = 0;
-  let skipped = 0;
+  let cacheInserted = 0;
+  let cacheUpdated = 0;
+  let cacheSkipped = 0;
+  let activeCached = 0;
+  let queuedPersist = 0;
+  let ignoredCount = 0;
   for (const batch of chunkArray(records, RPC_BATCH_SIZE)) {
-    const { data: upsertRes, error: upsertErr } = await supabase.rpc('upsert_matches_if_changed', {
+    const { data: stageRes, error: stageErr } = await supabase.rpc('stage_live_matches', {
       records: batch,
     });
-    if (upsertErr) throw upsertErr;
-    inserted += Number(upsertRes?.inserted_count ?? 0);
-    updated += Number(upsertRes?.updated_count ?? 0);
-    skipped += Number(upsertRes?.skipped_count ?? 0);
+    if (stageErr) throw stageErr;
+    cacheInserted += Number(stageRes?.cached_inserted_count ?? 0);
+    cacheUpdated += Number(stageRes?.cached_updated_count ?? 0);
+    cacheSkipped += Number(stageRes?.cached_skipped_count ?? 0);
+    activeCached += Number(stageRes?.active_cached_count ?? 0);
+    queuedPersist += Number(stageRes?.queued_persist_count ?? 0);
+    ignoredCount += Number(stageRes?.ignored_count ?? 0);
   }
+
+  const { data: persistRes, error: persistErr } = await supabase.rpc('persist_ready_active_matches');
+  if (persistErr) throw persistErr;
+  const inserted = Number(persistRes?.persisted_inserted_count ?? 0);
+  const updated = Number(persistRes?.persisted_updated_count ?? 0);
+  const skipped = Number(persistRes?.persisted_skipped_count ?? 0);
+  const persistedCount = Number(persistRes?.marked_persisted_count ?? 0);
+  const persistFailedCount = Number(persistRes?.persist_failed_count ?? 0);
+  const archivedCount = Number(persistRes?.archived_count ?? 0);
+  const compensatedCount = Number(persistRes?.compensated_count ?? 0);
 
   const pulled = uniqueRows.length;
   const validated = records.length;
@@ -118,10 +145,40 @@ export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode
 
   const { error: syncRunErr } = await supabase.from('sync_runs').insert({
     source: 'tennis-json',
+    source_id: syncRunMeta?.sourceId || null,
+    adapter_key: syncRunMeta?.adapterKey || null,
     status: 'SUCCESS',
     pulled_count: pulled,
     upserted_count: successfulStored,
-    error_message: `mode=${mode}; kind=${String(runKind || mode)}; validated=${validated}; invalid=${invalidCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}`,
+    run_group: syncRunMeta?.runGroup || null,
+    trigger_mode: syncRunMeta?.triggerMode || 'manual',
+    attempt_no: Number(syncRunMeta?.attemptNo || 1),
+    retry_kind: syncRunMeta?.retryKind || 'primary',
+    circuit_state: syncRunMeta?.circuitState || 'closed',
+    isolation_key: syncRunMeta?.isolationKey || null,
+    result_payload: {
+      cacheInserted,
+      cacheUpdated,
+      cacheSkipped,
+      activeCached,
+      queuedPersist,
+      inserted,
+      updated,
+      skipped,
+      persistedCount,
+      persistFailedCount,
+      archivedCount,
+      compensatedCount,
+      invalidCount,
+      ignoredCount,
+      sourceUrl,
+    },
+    error_message:
+      `mode=${mode}; kind=${String(runKind || mode)}; validated=${validated}; invalid=${invalidCount}; ` +
+      `cacheInserted=${cacheInserted}; cacheUpdated=${cacheUpdated}; cacheSkipped=${cacheSkipped}; ` +
+      `activeCached=${activeCached}; pendingPersist=${queuedPersist}; persisted=${persistedCount}; ` +
+      `inserted=${inserted}; updated=${updated}; skipped=${skipped}; ` +
+      `persistFailed=${persistFailedCount}; archived=${archivedCount}; compensated=${compensatedCount}; ignored=${ignoredCount}`,
   });
   if (syncRunErr) throw syncRunErr;
 
@@ -131,8 +188,18 @@ export async function syncTennisOnce({ supabase, sourceUrl, tournamentName, mode
     pulled,
     validated,
     invalid: invalidCount,
+    cacheInserted,
+    cacheUpdated,
+    cacheSkipped,
+    activeCached,
+    queuedPersist,
     inserted,
     updated,
     skipped,
+    persistedCount,
+    persistFailedCount,
+    archivedCount,
+    compensatedCount,
+    ignoredCount,
   };
 }

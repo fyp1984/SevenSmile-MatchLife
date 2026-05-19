@@ -7,6 +7,7 @@ RUN npm install --omit=dev
 
 COPY scripts/watch-ymq.mjs ./watch-ymq.mjs
 COPY scripts/lib/ymq-sync.mjs ./lib/ymq-sync.mjs
+COPY scripts/lib/canonical-match.mjs ./lib/canonical-match.mjs
 COPY scripts/matchlife-uat/run-sync-once.mjs ./run-sync-once.mjs
 COPY scripts/matchlife-uat/wechat-oauth-server.mjs ./wechat-oauth-server.mjs
 COPY scripts/matchlife-uat/wechat-follower-sync.mjs ./wechat-follower-sync.mjs

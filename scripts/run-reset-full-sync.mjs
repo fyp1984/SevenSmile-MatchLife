@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { createSupabaseServiceClient, resetDb, syncOnce } from './lib/ymq-sync.mjs';
+import { attemptResetDb, createSupabaseServiceClient, syncOnce } from './lib/ymq-sync.mjs';
 import { syncTennisOnce } from './lib/tennis-sync.mjs';
 
 function parseEnvFile(filePath) {
@@ -95,7 +95,7 @@ async function main() {
   }
 
   try {
-    await resetDb({ supabase });
+    await attemptResetDb({ supabase });
   } catch (error) {
     if (!isMissingResetRpc(error)) {
       throw error;

@@ -142,7 +142,7 @@ http://localhost:18080/7smile-matchlife/
 - `matches`：比赛明细
 - `players`：选手档案
 - `sync_runs`：同步运行记录
-- `matchlife_data_sources`：数据源配置
+- `matchlife_data_sources`：Source Registry 数据源注册中心
 
 数据库变更统一使用 `supabase/migrations/` 下的时间戳 SQL 文件管理。
 
@@ -153,7 +153,15 @@ supabase migration list
 supabase db push
 pnpm sync:ymq
 pnpm sync:ymq:watch
+pnpm sync:orchestrator
 ```
+
+新增多数据源接入基础能力文档：
+
+- `docs/source-registry-inventory-report.md`
+- `docs/source-adapter-protocol.md`
+- `docs/source-orchestrator-deployment.md`
+- `docs/source-orchestrator-test-report.md`
 
 ## 说明
 

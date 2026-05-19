@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
+import { buildCanonicalMatchRecord } from './canonical-match.mjs';
 
 const YMQ_COURTS_URL = 'https://race.ymq.me/webservice/appWxRace/courts.do';
 const YMQ_MATCHES_URL = 'https://race.ymq.me/webservice/appWxMatch/matchesScore.do';
@@ -105,6 +106,71 @@ function chunkArray(list, size) {
   return out;
 }
 
+function hasLiveScore(row) {
+  if (typeof row?.battleScoreOne === 'number' || typeof row?.battleScoreTwo === 'number') {
+    return Number(row?.battleScoreOne ?? 0) > 0 || Number(row?.battleScoreTwo ?? 0) > 0;
+  }
+  if (!Array.isArray(row?.gameScores)) return false;
+  return row.gameScores.some((set) => Number(set?.scoreOne ?? 0) > 0 || Number(set?.scoreTwo ?? 0) > 0);
+}
+
+function isFinishedMatch(row) {
+  return row?.scoreStatusNo === 2 || typeof row?.scoreEndTime === 'number' || computeWinner(row) !== 'UNKNOWN';
+}
+
+function isActiveLiveMatch(row) {
+  if (isFinishedMatch(row)) return false;
+  return typeof row?.scoreStartTime === 'number' || hasLiveScore(row) || [1, 3, 4, 5].includes(Number(row?.scoreStatusNo ?? 0));
+}
+
+async function listPriorityCourtNos({ supabase, raceId, limit = 12 }) {
+  try {
+    const { data, error } = await supabase
+      .from('active_match_cache')
+      .select('court_num, cache_status, last_seen_at')
+      .eq('source', 'ymq')
+      .eq('source_race_id', raceId)
+      .order('last_seen_at', { ascending: false })
+      .limit(limit * 4);
+    if (error) return [];
+    return Array.from(
+      new Set(
+        (Array.isArray(data) ? data : [])
+          .filter((row) => row?.cache_status === 'ACTIVE' || row?.cache_status === 'READY_TO_PERSIST')
+          .map((row) => Number(row?.court_num))
+          .filter((courtNo) => Number.isFinite(courtNo) && courtNo > 0)
+      )
+    ).slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchSyncRuntimeState({ supabase }) {
+  try {
+    const { data, error } = await supabase.from('sync_runtime_state').select('*').limit(1);
+    if (error) {
+      return {
+        activeCachedCount: 0,
+        pendingPersistCount: 0,
+        persistedCount: 0,
+      };
+    }
+    const row = Array.isArray(data) ? data[0] || {} : {};
+    return {
+      activeCachedCount: Number(row?.active_cached_count ?? 0),
+      pendingPersistCount: Number(row?.pending_persist_count ?? 0),
+      persistedCount: Number(row?.persisted_count ?? 0),
+    };
+  } catch {
+    return {
+      activeCachedCount: 0,
+      pendingPersistCount: 0,
+      persistedCount: 0,
+    };
+  }
+}
+
 async function cleanupSyncRuns({ supabase, source = 'ymq', keep = 5 }) {
   const { data: keepRows, error: keepErr } = await supabase
     .from('sync_runs')
@@ -154,6 +220,19 @@ export function createSupabaseServiceClient({ url, serviceRoleKey }) {
   return createClient(url, serviceRoleKey);
 }
 
+function getResetDbErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    return String(error.message || error.details || error.hint || JSON.stringify(error));
+  }
+  return String(error || '');
+}
+
+export function isResetDbUnavailableError(error) {
+  const message = getResetDbErrorMessage(error);
+  return /PGRST202|Could not find the function|does not exist|schema cache|permission denied/i.test(message);
+}
+
 export async function listCourts({ raceId }) {
   const resCourts = await postJson(YMQ_COURTS_URL, { body: { raceId }, header: {} });
   const courts = Array.isArray(resCourts.detail) ? resCourts.detail : [];
@@ -175,6 +254,24 @@ export async function resetDb({ supabase }) {
   if (error) throw error;
 }
 
+export async function attemptResetDb({ supabase }) {
+  try {
+    await resetDb({ supabase });
+    return {
+      resetApplied: true,
+      warning: null,
+    };
+  } catch (error) {
+    if (!isResetDbUnavailableError(error)) {
+      throw error;
+    }
+    return {
+      resetApplied: false,
+      warning: '当前环境暂不支持直接清空，已自动改为执行全量更新。',
+    };
+  }
+}
+
 export async function syncOnce({
   supabase,
   raceId,
@@ -183,16 +280,30 @@ export async function syncOnce({
   courtNos,
   maxPages,
   runKind,
+  syncRunMeta,
+  sourcePriority = 100,
 }) {
   const courts = await listCourts({ raceId });
   if (courts.length === 0) throw new Error('No courts returned');
 
   const rowsPerPage = 200;
   const pagesLimit = typeof maxPages === 'number' ? maxPages : mode === 'fast' ? 1 : 200;
+  const explicitCourtNos = Array.isArray(courtNos)
+    ? Array.from(new Set(courtNos.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)))
+    : [];
+  const prioritizedCourtNos =
+    explicitCourtNos.length > 0 || mode !== 'fast'
+      ? []
+      : await listPriorityCourtNos({ supabase, raceId });
 
   const allRows = [];
   const activeByCourt = new Map();
-  const targetCourts = Array.isArray(courtNos) && courtNos.length > 0 ? courts.filter((c) => courtNos.includes(c.num)) : courts;
+  const targetCourts =
+    explicitCourtNos.length > 0
+      ? courts.filter((c) => explicitCourtNos.includes(c.num))
+      : prioritizedCourtNos.length > 0
+        ? courts.filter((c) => prioritizedCourtNos.includes(c.num))
+        : courts;
   for (const c of targetCourts) {
     let page = 1;
     let fetched = 0;
@@ -201,9 +312,6 @@ export async function syncOnce({
       const res = await listMatches({ raceId, courtNo: c.num, page, rows: rowsPerPage });
       const list = res.rows;
       total = res.total;
-      if (list.some((r) => r?.scoreStatusNo !== 2)) {
-        activeByCourt.set(c.num, page);
-      }
       allRows.push(...list);
       fetched += list.length;
       if (fetched >= total || list.length === 0) break;
@@ -245,10 +353,14 @@ export async function syncOnce({
 
     const { ageYears, itemName, eventKey } = parseEventKey(row);
     const roundName = parseRoundName(row);
+    if (isActiveLiveMatch(row) && Number.isFinite(Number(row.courtNum)) && Number(row.courtNum) > 0) {
+      activeByCourt.set(Number(row.courtNum), pagesLimit);
+    }
 
-    records.push({
+    records.push(buildCanonicalMatchRecord({
       source: 'ymq',
-      ymq_match_id: `ymq:${row.id}`,
+      source_race_id: raceId,
+      source_match_id: `ymq:${row.id}`,
       category: row.groupName || 'U',
       tournament_name: tournamentName,
       start_time: startTime,
@@ -265,29 +377,49 @@ export async function syncOnce({
       players_text: playersText,
       score_text: scoreText,
       winner_side: winner,
+      source_status_no: Number.isFinite(Number(row.scoreStatusNo)) ? Number(row.scoreStatusNo) : null,
       source_updated_at: sourceUpdatedAt,
       raw_hash: rawHash,
       raw: row,
       age_years: ageYears,
       item_name: itemName,
       event_key: eventKey,
-    });
+    }, {
+      sourcePriority,
+    }));
   }
 
   // Avoid oversized request bodies through nginx/proxy by chunking RPC writes.
   const RPC_BATCH_SIZE = Number(process.env.MATCHLIFE_RPC_BATCH_SIZE || 150);
-  let inserted = 0;
-  let updated = 0;
-  let skipped = 0;
+  let cacheInserted = 0;
+  let cacheUpdated = 0;
+  let cacheSkipped = 0;
+  let activeCached = 0;
+  let queuedPersist = 0;
+  let ignoredCount = 0;
   for (const batch of chunkArray(records, RPC_BATCH_SIZE)) {
-    const { data: upsertRes, error: upsertErr } = await supabase.rpc('upsert_matches_if_changed', {
+    const { data: stageRes, error: stageErr } = await supabase.rpc('stage_live_matches', {
       records: batch,
     });
-    if (upsertErr) throw upsertErr;
-    inserted += Number(upsertRes?.inserted_count ?? 0);
-    updated += Number(upsertRes?.updated_count ?? 0);
-    skipped += Number(upsertRes?.skipped_count ?? 0);
+    if (stageErr) throw stageErr;
+    cacheInserted += Number(stageRes?.cached_inserted_count ?? 0);
+    cacheUpdated += Number(stageRes?.cached_updated_count ?? 0);
+    cacheSkipped += Number(stageRes?.cached_skipped_count ?? 0);
+    activeCached += Number(stageRes?.active_cached_count ?? 0);
+    queuedPersist += Number(stageRes?.queued_persist_count ?? 0);
+    ignoredCount += Number(stageRes?.ignored_count ?? 0);
   }
+
+  const { data: persistRes, error: persistErr } = await supabase.rpc('persist_ready_active_matches');
+  if (persistErr) throw persistErr;
+  const inserted = Number(persistRes?.persisted_inserted_count ?? 0);
+  const updated = Number(persistRes?.persisted_updated_count ?? 0);
+  const skipped = Number(persistRes?.persisted_skipped_count ?? 0);
+  const persistedCount = Number(persistRes?.marked_persisted_count ?? 0);
+  const persistFailedCount = Number(persistRes?.persist_failed_count ?? 0);
+  const archivedCount = Number(persistRes?.archived_count ?? 0);
+  const compensatedCount = Number(persistRes?.compensated_count ?? 0);
+  const runtimeState = await fetchSyncRuntimeState({ supabase });
 
   const pulled = uniqueRows.length;
   const validated = records.length;
@@ -295,10 +427,46 @@ export async function syncOnce({
 
   const { error: syncRunErr } = await supabase.from('sync_runs').insert({
     source: 'ymq',
+    source_id: syncRunMeta?.sourceId || null,
+    adapter_key: syncRunMeta?.adapterKey || null,
     status: 'SUCCESS',
     pulled_count: pulled,
     upserted_count: successfulStored,
-    error_message: `mode=${mode}; kind=${String(runKind || mode)}; validated=${validated}; invalid=${invalidCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}; hotCourts=${activeByCourt.size}; courts=${targetCourts.length}; pages=${pagesLimit}`,
+    active_cached_count: runtimeState.activeCachedCount,
+    pending_persist_count: runtimeState.pendingPersistCount,
+    persisted_count: runtimeState.persistedCount,
+    run_group: syncRunMeta?.runGroup || null,
+    trigger_mode: syncRunMeta?.triggerMode || 'manual',
+    attempt_no: Number(syncRunMeta?.attemptNo || 1),
+    retry_kind: syncRunMeta?.retryKind || 'primary',
+    circuit_state: syncRunMeta?.circuitState || 'closed',
+    isolation_key: syncRunMeta?.isolationKey || null,
+    result_payload: {
+      raceId,
+      cacheInserted,
+      cacheUpdated,
+      cacheSkipped,
+      activeCached: runtimeState.activeCachedCount,
+      pendingPersist: runtimeState.pendingPersistCount,
+      persisted: persistedCount,
+      inserted,
+      updated,
+      skipped,
+        persistFailedCount,
+        archivedCount,
+        compensatedCount,
+      ignoredCount,
+      activeCourts: Array.from(activeByCourt.keys()),
+      prioritizedCourtNos,
+    },
+    error_message:
+      `mode=${mode}; kind=${String(runKind || mode)}; validated=${validated}; invalid=${invalidCount}; ` +
+      `cacheInserted=${cacheInserted}; cacheUpdated=${cacheUpdated}; cacheSkipped=${cacheSkipped}; ` +
+      `activeCached=${runtimeState.activeCachedCount}; pendingPersist=${runtimeState.pendingPersistCount}; ` +
+      `persisted=${persistedCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}; ` +
+      `persistFailed=${persistFailedCount}; archived=${archivedCount}; compensated=${compensatedCount}; ` +
+      `ignored=${ignoredCount}; hotCourts=${activeByCourt.size}; priorityCourts=${prioritizedCourtNos.length}; ` +
+      `courts=${targetCourts.length}; pages=${pagesLimit}`,
   });
   if (syncRunErr) throw syncRunErr;
 
@@ -312,9 +480,22 @@ export async function syncOnce({
     pulled,
     validated,
     invalid: invalidCount,
+    cacheInserted,
+    cacheUpdated,
+    cacheSkipped,
+    activeCached: runtimeState.activeCachedCount,
+    pendingPersist: runtimeState.pendingPersistCount,
+    persistedCount,
     inserted,
     updated,
     skipped,
+    persistFailedCount,
+    archivedCount,
+    compensatedCount,
+    pulledCount: pulled,
+    upsertedCount: successfulStored,
+    ignoredCount,
+    prioritizedCourtNos,
     activeCourts: Array.from(activeByCourt.entries()).map(([courtNo, maxPage]) => ({
       courtNo,
       maxPage,

@@ -448,7 +448,12 @@ async function handleManualSync(req, res, url) {
     return;
   }
 
-  const mode = String(url.searchParams.get('mode') || 'full').trim() === 'fast' ? 'fast' : 'full';
+  const resetRequested = ['1', 'true', 'yes'].includes(String(url.searchParams.get('reset') || '').trim().toLowerCase());
+  const mode = resetRequested
+    ? 'full'
+    : String(url.searchParams.get('mode') || 'full').trim() === 'fast'
+      ? 'fast'
+      : 'full';
   const sourceUrl = firstHeader(req.headers['x-matchlife-source-url']);
   const sourceName = safeDecodeURIComponent(firstHeader(req.headers['x-matchlife-source-name']));
   const raceIdsRaw = firstHeader(req.headers['x-matchlife-race-ids']);
@@ -459,8 +464,20 @@ async function handleManualSync(req, res, url) {
     .map((item) => Number(item.trim()))
     .filter((n) => Number.isFinite(n) && n > 0);
   const tournamentName = (sourceName || DEFAULT_SYNC_TOURNAMENT_NAME).trim();
+  let resetResult = null;
 
   try {
+    if (resetRequested) {
+      const supabase = await getServiceSupabase();
+      if (!supabase) {
+        sendJson(res, 500, { ok: false, error: '当前环境缺少重建所需服务端密钥' });
+        return;
+      }
+      const mod = await import('./lib/ymq-sync.mjs');
+      resetResult = await mod.attemptResetDb({ supabase });
+      logLine(`reset requested before full sync raceId=${raceId} tournament=${tournamentName}`);
+    }
+
     const child = spawn('node', [SYNC_ONCE_SCRIPT, mode], {
       cwd: SYNC_RUNTIME_DIR,
       env: {
@@ -475,12 +492,21 @@ async function handleManualSync(req, res, url) {
     });
     activeSyncProcess = child;
     lastSyncTriggeredAt = Date.now();
-    logLine(`triggered mode=${mode} pid=${String(child.pid)} raceId=${raceId} tournament=${tournamentName}`);
-    child.on('exit', () => {
-      logLine(`finished pid=${String(child.pid)} mode=${mode}`);
+    logLine(`triggered mode=${mode} reset=${resetRequested ? '1' : '0'} pid=${String(child.pid)} raceId=${raceId} tournament=${tournamentName}`);
+    child.on('exit', (code) => {
+      logLine(`finished pid=${String(child.pid)} mode=${mode} reset=${resetRequested ? '1' : '0'} code=${String(code ?? '')}`);
       activeSyncProcess = null;
     });
-    sendJson(res, 202, { ok: true, mode, pid: child.pid, raceId, tournamentName });
+    sendJson(res, 202, {
+      ok: true,
+      mode,
+      reset: resetRequested,
+      resetApplied: resetRequested ? Boolean(resetResult?.resetApplied) : false,
+      warning: resetResult?.warning || null,
+      pid: child.pid,
+      raceId,
+      tournamentName,
+    });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
@@ -506,8 +532,8 @@ async function handleLocalReset(_req, res) {
     return;
   }
   const mod = await import('./lib/ymq-sync.mjs');
-  await mod.resetDb({ supabase });
-  sendJson(res, 200, { ok: true });
+  const resetResult = await mod.attemptResetDb({ supabase });
+  sendJson(res, 200, { ok: true, ...resetResult });
 }
 
 const server = http.createServer(async (req, res) => {
