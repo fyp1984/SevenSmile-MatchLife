@@ -43,10 +43,7 @@ const CARD_WIDTH = 1200;
 const CARD_HEIGHT = 630;
 const DPR = 2;
 
-/**
- * 创建渐变背景
- */
-function createGradientBackground(ctx: CanvasRenderingContext2D): void {
+function createDefaultGradientBackground(ctx: CanvasRenderingContext2D): void {
   const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
   gradient.addColorStop(0, '#FF9800');
   gradient.addColorStop(1, '#E63900');
@@ -110,30 +107,39 @@ function drawBrandWatermark(
 }
 
 function applyTemplateBackground(ctx: CanvasRenderingContext2D, template: ShareCardTemplate = 'default') {
-  const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
-  
   switch (template) {
     case 'sports':
+      {
+        const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
       gradient.addColorStop(0, '#1E3A8A'); // Blue
       gradient.addColorStop(1, '#0F172A'); // Dark Blue
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
       break;
+      }
     case 'minimal':
+      {
+        const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
       gradient.addColorStop(0, '#F8FAFC'); // Very Light Gray
       gradient.addColorStop(1, '#E2E8F0'); // Light Gray
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
       break;
+      }
     case 'celebration':
+      {
+        const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
       gradient.addColorStop(0, '#FFD700'); // Gold
       gradient.addColorStop(1, '#FF8C00'); // Orange
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
       break;
+      }
     case 'default':
     default:
-      gradient.addColorStop(0, '#FF9800'); // Orange
-      gradient.addColorStop(1, '#E63900'); // Red-Orange
+      createDefaultGradientBackground(ctx);
       break;
   }
-  
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
 }
 
 function drawMultilineText(
@@ -212,7 +218,7 @@ function drawMatchCard(
   drawBrandWatermark(ctx, 60, 60, CARD_WIDTH - 120, CARD_HEIGHT - 120, template);
 
   ctx.fillStyle = colors.textMain;
-  const titleFontSize = adjustFontSizeToFit(ctx, data.tournamentName, CARD_WIDTH - 240, 48, 28, 'PingFang SC');
+  adjustFontSizeToFit(ctx, data.tournamentName, CARD_WIDTH - 240, 48, 28, 'PingFang SC');
   ctx.textAlign = 'center';
   ctx.fillText(data.tournamentName, CARD_WIDTH / 2, 160);
 
@@ -274,7 +280,7 @@ function drawPlayerCard(
   drawBrandWatermark(ctx, 60, 60, CARD_WIDTH - 120, CARD_HEIGHT - 120, template);
 
   ctx.fillStyle = colors.textMain;
-  const titleFontSize = adjustFontSizeToFit(ctx, data.playerName, CARD_WIDTH - 240, 56, 32, 'PingFang SC');
+  adjustFontSizeToFit(ctx, data.playerName, CARD_WIDTH - 240, 56, 32, 'PingFang SC');
   ctx.textAlign = 'center';
   ctx.fillText(data.playerName, CARD_WIDTH / 2, 160);
 
@@ -328,7 +334,7 @@ function drawStatsCard(
   drawBrandWatermark(ctx, 60, 60, CARD_WIDTH - 120, CARD_HEIGHT - 120, template);
 
   ctx.fillStyle = colors.textMain;
-  const titleFontSize = adjustFontSizeToFit(ctx, data.tournamentName, CARD_WIDTH - 240, 42, 28, 'PingFang SC');
+  adjustFontSizeToFit(ctx, data.tournamentName, CARD_WIDTH - 240, 42, 28, 'PingFang SC');
   ctx.textAlign = 'center';
   ctx.fillText(data.tournamentName, CARD_WIDTH / 2, 140);
 

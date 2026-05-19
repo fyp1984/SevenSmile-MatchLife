@@ -19,12 +19,6 @@ function normalizeBasePath(input: string) {
   return value.replace(/^\/+|\/+$/g, '');
 }
 
-function timeoutFetch(url: string, timeoutMs = 1800) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { signal: controller.signal }).finally(() => window.clearTimeout(timer));
-}
-
 async function fetchPublicIp() {
   // Due to frequent ERR_CONNECTION_REFUSED / ERR_BLOCKED_BY_CLIENT 
   // from ad blockers for ipify.org, we return empty to rely on the fallback signature.

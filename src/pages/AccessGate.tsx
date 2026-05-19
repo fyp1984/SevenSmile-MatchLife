@@ -51,7 +51,7 @@ export default function AccessGate() {
   return (
     <div className="max-w-lg mx-auto pt-10">
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
-        <h1 className="text-2xl font-extrabold text-brand-brown mb-2">数据状态访问验证</h1>
+        <h1 className="text-2xl font-extrabold text-brand-brown mb-2">更新状态访问验证</h1>
         <p className="text-sm text-brand-gray mb-6">当前版本使用口令校验代替七笑果 SSO 登录。</p>
 
         <form onSubmit={submit} className="space-y-4">
@@ -75,7 +75,7 @@ export default function AccessGate() {
             type="submit"
             className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all"
           >
-            进入数据状态
+            进入更新状态
           </button>
         </form>
       </div>
