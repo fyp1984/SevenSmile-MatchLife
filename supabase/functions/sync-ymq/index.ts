@@ -175,6 +175,77 @@ function parseEventKey(row: MatchRow): { ageYears: number | null; itemName: stri
   return { ageYears, itemName: item || null, eventKey };
 }
 
+function hasLiveScore(row: MatchRow): boolean {
+  if (typeof row.battleScoreOne === "number" || typeof row.battleScoreTwo === "number") {
+    return Number(row.battleScoreOne ?? 0) > 0 || Number(row.battleScoreTwo ?? 0) > 0;
+  }
+  if (!Array.isArray(row.gameScores)) return false;
+  return row.gameScores.some((set) => Number(set?.scoreOne ?? 0) > 0 || Number(set?.scoreTwo ?? 0) > 0);
+}
+
+function isFinishedMatch(row: MatchRow): boolean {
+  return row.scoreStatusNo === 2 || typeof row.scoreEndTime === "number" || computeWinner(row) !== "UNKNOWN";
+}
+
+function isActiveLiveMatch(row: MatchRow): boolean {
+  if (isFinishedMatch(row)) return false;
+  return typeof row.scoreStartTime === "number" || hasLiveScore(row) || [1, 3, 4, 5].includes(Number(row.scoreStatusNo ?? 0));
+}
+
+function chunkArray<T>(list: T[], size: number): T[][] {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) {
+    out.push(list.slice(i, i + size));
+  }
+  return out;
+}
+
+async function listPriorityCourtNos(supabase: SupabaseAdmin, raceId: number): Promise<number[]> {
+  try {
+    const { data, error } = await supabase
+      .from("active_match_cache")
+      .select("court_num, cache_status, last_seen_at")
+      .eq("source", "ymq")
+      .eq("source_race_id", raceId)
+      .order("last_seen_at", { ascending: false })
+      .limit(48);
+    if (error) return [];
+    return Array.from(
+      new Set(
+        (Array.isArray(data) ? data : [])
+          .map((row) => row as Record<string, unknown>)
+          .filter((row) => row.cache_status === "ACTIVE" || row.cache_status === "READY_TO_PERSIST")
+          .map((row) => Number(row.court_num))
+          .filter((courtNo) => Number.isFinite(courtNo) && courtNo > 0),
+      ),
+    ).slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchSyncRuntimeState(supabase: SupabaseAdmin): Promise<{
+  activeCachedCount: number;
+  pendingPersistCount: number;
+  persistedCount: number;
+}> {
+  try {
+    const { data, error } = await supabase.from("sync_runtime_state").select("*").limit(1);
+    if (error) {
+      return { activeCachedCount: 0, pendingPersistCount: 0, persistedCount: 0 };
+    }
+    const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+    return {
+      activeCachedCount: Number(row?.active_cached_count ?? 0),
+      pendingPersistCount: Number(row?.pending_persist_count ?? 0),
+      persistedCount: Number(row?.persisted_count ?? 0),
+    };
+  } catch {
+    return { activeCachedCount: 0, pendingPersistCount: 0, persistedCount: 0 };
+  }
+}
+
 async function cleanupSyncRuns(supabase: unknown, source: string) {
   type SyncRunIdRow = { id: number } | { id: string };
   const sb = supabase as SupabaseAdmin;
@@ -266,10 +337,15 @@ serve(async (req: Request) => {
     }
 
     const allRows: MatchRow[] = [];
+    const activeByCourt = new Map<number, number>();
     const rowsPerPage = 200;
     const maxPages = mode === "fast" ? 1 : 200;
+    const prioritizedCourtNos = mode === "fast" ? await listPriorityCourtNos(supabase, raceId) : [];
+    const targetCourts = prioritizedCourtNos.length > 0
+      ? courts.filter((court) => prioritizedCourtNos.includes(court.num))
+      : courts;
 
-    for (const court of courts) {
+    for (const court of targetCourts) {
       let page = 1;
       let fetched = 0;
       let total = 0;
@@ -335,9 +411,13 @@ serve(async (req: Request) => {
 
       const { ageYears, itemName, eventKey } = parseEventKey(row);
       const roundName = parseRoundName(row);
+      if (isActiveLiveMatch(row) && Number.isFinite(Number(row.courtNum)) && Number(row.courtNum) > 0) {
+        activeByCourt.set(Number(row.courtNum), maxPages);
+      }
 
       records.push({
         source: "ymq",
+        source_race_id: raceId,
         ymq_match_id: `ymq:${row.id}`,
         category: row.groupName || "U",
         tournament_name: tournamentName,
@@ -355,6 +435,7 @@ serve(async (req: Request) => {
         players_text: playersText,
         score_text: scoreText,
         winner_side: winner,
+        source_status_no: Number.isFinite(Number(row.scoreStatusNo)) ? Number(row.scoreStatusNo) : null,
         source_updated_at: sourceUpdatedAt,
         raw_hash: rawHash,
         raw: row,
@@ -364,24 +445,55 @@ serve(async (req: Request) => {
       });
     }
 
-    const { data: upsertRes, error: upsertErr } = await supabase.rpc(
-      "upsert_matches_if_changed",
-      { records },
-    );
-    if (upsertErr) throw upsertErr;
+    const batchSize = Number(getEnv("MATCHLIFE_RPC_BATCH_SIZE") || 150);
+    let cacheInserted = 0;
+    let cacheUpdated = 0;
+    let cacheSkipped = 0;
+    let ignoredCount = 0;
+    for (const batch of chunkArray(records, batchSize)) {
+      const { data: stageRes, error: stageErr } = await supabase.rpc(
+        "stage_live_matches",
+        { records: batch },
+      );
+      if (stageErr) throw stageErr;
+      const stageMeta = (typeof stageRes === "object" && stageRes !== null)
+        ? (stageRes as Record<string, unknown>)
+        : {};
+      cacheInserted += Number(stageMeta.cached_inserted_count ?? 0);
+      cacheUpdated += Number(stageMeta.cached_updated_count ?? 0);
+      cacheSkipped += Number(stageMeta.cached_skipped_count ?? 0);
+      ignoredCount += Number(stageMeta.ignored_count ?? 0);
+    }
 
-    const meta = (typeof upsertRes === 'object' && upsertRes !== null) ? (upsertRes as Record<string, unknown>) : {};
-    const inserted = Number(meta['inserted_count'] ?? 0);
-    const updated = Number(meta['updated_count'] ?? 0);
-    const skipped = Number(meta['skipped_count'] ?? 0);
-    const upsertedCount = inserted + updated;
+    const { data: persistRes, error: persistErr } = await supabase.rpc(
+      "persist_ready_active_matches",
+      {},
+    );
+    if (persistErr) throw persistErr;
+
+    const persistMeta = (typeof persistRes === 'object' && persistRes !== null) ? (persistRes as Record<string, unknown>) : {};
+    const inserted = Number(persistMeta['persisted_inserted_count'] ?? 0);
+    const updated = Number(persistMeta['persisted_updated_count'] ?? 0);
+    const skipped = Number(persistMeta['persisted_skipped_count'] ?? 0);
+    const markedPersistedCount = Number(persistMeta['marked_persisted_count'] ?? 0);
+    const upsertedCount = inserted + updated + skipped;
+    const runtimeState = await fetchSyncRuntimeState(supabase);
 
     await supabase.from("sync_runs").insert({
       source: "ymq",
       status: "SUCCESS",
       pulled_count: pulledCount,
       upserted_count: upsertedCount,
-      error_message: `mode=${mode}; validated=${records.length}; invalid=${invalidCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}`,
+      active_cached_count: runtimeState.activeCachedCount,
+      pending_persist_count: runtimeState.pendingPersistCount,
+      persisted_count: runtimeState.persistedCount,
+      error_message:
+        `mode=${mode}; validated=${records.length}; invalid=${invalidCount}; ` +
+        `cacheInserted=${cacheInserted}; cacheUpdated=${cacheUpdated}; cacheSkipped=${cacheSkipped}; ` +
+        `activeCached=${runtimeState.activeCachedCount}; pendingPersist=${runtimeState.pendingPersistCount}; ` +
+        `persisted=${markedPersistedCount}; inserted=${inserted}; updated=${updated}; skipped=${skipped}; ` +
+        `ignored=${ignoredCount}; hotCourts=${activeByCourt.size}; priorityCourts=${prioritizedCourtNos.length}; ` +
+        `courts=${targetCourts.length}; pages=${maxPages}`,
     });
 
     await cleanupSyncRuns(supabase, "ymq");
@@ -395,10 +507,22 @@ serve(async (req: Request) => {
         mode,
         pulled: pulledCount,
         upserted: upsertedCount,
+        cacheInserted,
+        cacheUpdated,
+        cacheSkipped,
+        activeCached: runtimeState.activeCachedCount,
+        pendingPersist: runtimeState.pendingPersistCount,
+        persistedCount: markedPersistedCount,
         inserted,
         updated,
         skipped,
+        ignored: ignoredCount,
         invalid: invalidCount,
+        prioritizedCourtNos,
+        activeCourts: Array.from(activeByCourt.entries()).map(([courtNo, page]) => ({
+          courtNo,
+          maxPage: page,
+        })),
       }),
       { 
         headers: { "Content-Type": "application/json", ...corsHeaders() },
