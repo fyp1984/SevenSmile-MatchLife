@@ -99,7 +99,7 @@ function drawBrandWatermark(
 
   for (let row = -2; row <= 2; row += 1) {
     for (let col = -3; col <= 3; col += 1) {
-      ctx.fillText('七笑果 MatchLife', col * 260, row * 120);
+      ctx.fillText('七笑果-赛事生涯', col * 260, row * 120);
     }
   }
 
@@ -261,7 +261,7 @@ function drawMatchCard(
   ctx.fillStyle = colors.textMain;
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText('七笑果 MatchLife', 80, CARD_HEIGHT - 60);
+  ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
 }
 
 function drawPlayerCard(
@@ -315,7 +315,7 @@ function drawPlayerCard(
   ctx.fillStyle = colors.textMain;
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText('七笑果 MatchLife', 80, CARD_HEIGHT - 60);
+  ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
 }
 
 function drawStatsCard(
@@ -370,7 +370,7 @@ function drawStatsCard(
 
   ctx.fillStyle = colors.textMain;
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
-  ctx.fillText('七笑果 MatchLife', 80, CARD_HEIGHT - 60);
+  ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
 }
 
 export async function generateShareCard(data: ShareCardData): Promise<string> {

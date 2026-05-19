@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { markWechatAccess, sanitizeNextPath } from '../lib/wechatAccess';
 
 export default function WechatComplete() {
   const nav = useNavigate();
@@ -11,7 +12,7 @@ export default function WechatComplete() {
     const params = new URLSearchParams(loc.search);
     return {
       ok: params.get('ok'),
-      next: params.get('next') || '/',
+      next: sanitizeNextPath(params.get('next')),
       ticket: params.get('ticket') || '',
     };
   }, [loc.search]);
@@ -25,7 +26,9 @@ export default function WechatComplete() {
           const json = await res.json().catch(() => ({}));
           if (!res.ok || !json?.ok) {
             if (!cancelled) {
-              const target = json?.redirectToFollow ? '/follow' : `/gate/wechat?next=${encodeURIComponent(next)}`;
+              const target = json?.redirectToFollow
+                ? `/follow?next=${encodeURIComponent(next)}`
+                : `/gate/wechat?next=${encodeURIComponent(next)}`;
               setMessage(json?.error || '链接已失效，正在返回验证页...');
               window.setTimeout(() => {
                 nav(target, { replace: true });
@@ -33,11 +36,10 @@ export default function WechatComplete() {
             }
             return;
           }
-          sessionStorage.setItem(
-            'matchlife_wechat_ok',
+          markWechatAccess(
             `${json?.version || import.meta.env.VITE_WECHAT_ACCESS_VERSION || new Date().toISOString().slice(0, 10)}`
           );
-          if (!cancelled) nav(json?.next || next, { replace: true });
+          if (!cancelled) nav(sanitizeNextPath(json?.next || next), { replace: true });
           return;
         } catch {
           if (!cancelled) {
@@ -51,8 +53,7 @@ export default function WechatComplete() {
       }
 
       if (ok === '1') {
-        sessionStorage.setItem(
-          'matchlife_wechat_ok',
+        markWechatAccess(
           `${import.meta.env.VITE_WECHAT_ACCESS_VERSION || new Date().toISOString().slice(0, 10)}`
         );
         nav(next, { replace: true });

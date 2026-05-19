@@ -16,7 +16,6 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
-import { fetchVisitStats, normalizeVisitStatsError, type VisitStats } from '../lib/visitMetrics';
 import { fetchSourcesFromDb, getRaceIdFromSource, type SourceItem } from '../lib/dataSources';
 import {
   fetchObservabilitySnapshot,
@@ -97,8 +96,6 @@ export default function SyncStatus() {
   const [autoSync, setAutoSync] = useState(false);
   const [autoTickAt, setAutoTickAt] = useState<string | null>(null);
   const [hasServiceRoleKey, setHasServiceRoleKey] = useState<boolean | null>(null);
-  const [visitStats, setVisitStats] = useState<VisitStats | null>(null);
-  const [visitStatsError, setVisitStatsError] = useState<string | null>(null);
   const [syncSources, setSyncSources] = useState<SourceItem[]>([]);
   const [activeSource, setActiveSource] = useState<SourceItem | null>(null);
   const [actionMsg, setActionMsg] = useState<{ tone: 'success' | 'warning'; text: string } | null>(null);
@@ -154,16 +151,6 @@ export default function SyncStatus() {
     }),
     [activeSource, buildRaceIdsHeader],
   );
-
-  const loadVisitStats = async () => {
-    try {
-      setVisitStatsError(null);
-      const stats = await fetchVisitStats(supabase);
-      setVisitStats(stats);
-    } catch (error) {
-      setVisitStatsError(normalizeVisitStatsError(error));
-    }
-  };
 
   const loadObservability = useCallback(async () => {
     setLoading(true);
@@ -390,7 +377,6 @@ export default function SyncStatus() {
 
   useEffect(() => {
     void loadObservability();
-    loadVisitStats();
     void loadActiveSource();
     if (!isLocalhost()) {
       setHasServiceRoleKey(null);
@@ -403,16 +389,11 @@ export default function SyncStatus() {
   }, [apiBase, loadObservability]);
 
   useEffect(() => {
-    const handler = () => {
-      loadVisitStats();
-    };
-    window.addEventListener('matchlife:visit-recorded', handler);
     return () => {
       for (const timer of refreshTimersRef.current) {
         window.clearTimeout(timer);
       }
       refreshTimersRef.current = [];
-      window.removeEventListener('matchlife:visit-recorded', handler);
     };
   }, []);
 
@@ -512,10 +493,9 @@ export default function SyncStatus() {
           />
           <ActionIconButton
             title="刷新状态"
-            hint="重新读取最新状态和访问统计，不会触发新的更新任务。"
+            hint="重新读取最新状态，不会触发新的更新任务。"
             onClick={() => {
               void loadObservability();
-              loadVisitStats();
             }}
             loading={loading}
             icon={<RotateCcw className="h-4 w-4" />}
@@ -596,26 +576,6 @@ export default function SyncStatus() {
                 : 'text-emerald-600 bg-emerald-100 border-emerald-200',
             icon: <Database className="h-5 w-5" />,
           },
-          {
-            label: '需要确认',
-            value: runtime?.manualReviewCount ?? 0,
-            hint: `需要进一步确认 ${runtime?.qualityBlockedCount ?? 0} 场`,
-            tone:
-              (runtime?.manualReviewCount || 0) > 0 || (runtime?.qualityBlockedCount || 0) > 0
-                ? 'text-red-700 bg-red-50 border-red-200'
-                : 'text-emerald-600 bg-emerald-100 border-emerald-200',
-            icon: <Wrench className="h-5 w-5" />,
-          },
-          {
-            label: '受影响范围',
-            value: summary?.pausedScopeCount ?? 0,
-            hint: pausedScopes[0]?.pauseReason || '当前没有受影响的统计范围',
-            tone:
-              (summary?.pausedScopeCount || 0) > 0
-                ? getStatusTone((summary?.criticalPausedScopeCount || 0) > 0 ? 'critical' : 'warning')
-                : getStatusTone('healthy'),
-            icon: <AlertTriangle className="h-5 w-5" />,
-          },
         ].map((item) => (
           <div key={item.label} className="rounded-[26px] border border-orange-100 bg-white/85 p-5 shadow-sm backdrop-blur-sm">
             <div className={`mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border ${item.tone}`}>
@@ -633,133 +593,6 @@ export default function SyncStatus() {
           {errorMsg}
         </div>
       )}
-
-      {runtime && (
-        <div className={`mb-6 w-full rounded-3xl border px-6 py-5 ${getStatusTone(runtime.statusLevel)}`}>
-          <div className="flex items-start gap-3">
-            <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0" />
-            <div>
-              <div className="font-bold">
-                当前状态：{getStatusLabel(runtime.statusLevel)}
-              </div>
-              <div className="mt-1 leading-6">{runtime.summary || '当前实时链路状态正常。'}</div>
-              {runtime.recoveryAction && <div className="mt-2 leading-6">建议处理：{runtime.recoveryAction}</div>}
-              <div className="mt-2 text-xs">
-                数据延迟 {formatSecondsRough(runtime.sourceLagSeconds)} · 最近确认更新 {formatDateTime(runtime.lastPersistedAt)}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="mb-6 w-full rounded-3xl border border-orange-50 bg-white/80 shadow-sm backdrop-blur-sm">
-        <div className="border-b border-orange-100 px-6 py-5">
-          <h2 className="flex items-center gap-2 text-lg font-extrabold text-brand-brown sm:text-xl">
-            <AlertTriangle className="h-5 w-5 text-orange-500" />
-            当前提醒
-          </h2>
-          <p className="mt-1 text-sm text-brand-gray">集中展示当前最需要关注的问题和建议处理方式。</p>
-        </div>
-        <div className="space-y-3 p-5">
-          {loading ? (
-            <div className="rounded-2xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-sm text-orange-600">加载中...</div>
-          ) : alerts.length === 0 ? (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">当前没有阻塞或关注级告警。</div>
-          ) : (
-            alerts.map((alert) => (
-              <div key={alert.alertKey} className={`rounded-2xl border px-4 py-4 ${getStatusTone(alert.severity)}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-current/20 px-3 py-1 text-xs font-bold">{getStatusLabel(alert.severity)}</span>
-                  <span className="text-sm font-bold">{alert.scopeLabel}</span>
-                </div>
-                <div className="mt-2 text-sm leading-6">{alert.summary || '暂无摘要'}</div>
-                {alert.recoveryAction && <div className="mt-2 text-sm leading-6">建议处理：{alert.recoveryAction}</div>}
-                <div className="mt-2 text-xs opacity-80">最近发生：{formatDateTime(alert.occurredAt)}</div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="mb-6 w-full rounded-3xl border border-orange-50 bg-white/80 shadow-sm backdrop-blur-sm">
-        <div className="border-b border-orange-100 px-6 py-5">
-          <h2 className="flex items-center gap-2 text-lg font-extrabold text-brand-brown sm:text-xl">
-            <Server className="h-5 w-5 text-orange-500" />
-            更新来源情况
-          </h2>
-          <p className="mt-1 text-sm text-brand-gray">查看各更新来源是否正常、最近更新时间和建议处理方式。</p>
-        </div>
-        <div className="space-y-3 p-5">
-          {loading ? (
-            <div className="rounded-2xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-sm text-orange-600">加载中...</div>
-          ) : sourceHealth.length === 0 ? (
-            <div className="rounded-2xl border border-orange-100 bg-white px-4 py-3 text-sm text-brand-gray">暂无来源健康样本。</div>
-          ) : (
-            sourceHealth.map((source) => (
-              <div key={source.id} className="rounded-2xl border border-orange-100 bg-white px-4 py-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusTone(source.statusLevel)}`}>
-                    {getStatusLabel(source.statusLevel)}
-                  </span>
-                  <span className="text-sm font-bold text-brand-brown">{source.name}</span>
-                  {!source.isDue && source.nextEligibleAt && (
-                    <span className="text-xs text-amber-700">稍后重试 {formatDateTime(source.nextEligibleAt)}</span>
-                  )}
-                </div>
-                <div className="mt-2 text-sm leading-6 text-brand-gray">{source.summary || '暂无摘要'}</div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-brand-gray">
-                  <span>更新延迟：{formatSecondsRough(source.collectionLagSeconds)}</span>
-                  <span>连续失败：{source.failureStreak}</span>
-                  <span>最近成功：{formatDateTime(source.lastSucceededAt)}</span>
-                </div>
-                {source.lastErrorMessage && (
-                  <div className="mt-2 rounded-2xl bg-orange-50/70 px-3 py-2 text-xs text-brand-gray">
-                    最近问题：{source.lastErrorMessage}
-                  </div>
-                )}
-                {source.recoveryAction && <div className="mt-2 text-xs text-brand-brown">建议处理：{source.recoveryAction}</div>}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="mb-6 w-full rounded-3xl border border-orange-50 bg-white/80 shadow-sm backdrop-blur-sm">
-        <div className="border-b border-orange-100 px-6 py-5">
-          <h2 className="flex items-center gap-2 text-lg font-extrabold text-brand-brown sm:text-xl">
-            <Gauge className="h-5 w-5 text-orange-500" />
-            受影响的赛事范围
-          </h2>
-          <p className="mt-1 text-sm text-brand-gray">当结果仍在更新时，这里会提示哪些赛事统计需要稍后再看。</p>
-        </div>
-        <div className="space-y-3 p-5">
-          {loading ? (
-            <div className="rounded-2xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-sm text-orange-600">加载中...</div>
-          ) : pausedScopes.length === 0 ? (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">当前没有受影响的赛事范围。</div>
-          ) : (
-            pausedScopes.map((scope) => (
-              <div key={scope.scopeKey} className={`rounded-2xl border px-4 py-4 ${getStatusTone(scope.statusLevel)}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-current/20 px-3 py-1 text-xs font-bold">{scope.scopeType === 'leaderboard' ? '排行榜' : '赛事统计'}</span>
-                  <span className="text-sm font-bold">{scope.scopeLabel}</span>
-                </div>
-                <div className="mt-2 text-sm leading-6">{scope.pauseReason || scope.scopeSummary || '当前范围暂停'}</div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs opacity-90">
-                  <span>影响比赛：{scope.affectedMatchCount}</span>
-                  <span>待处理：{scope.pendingPersistCount}</span>
-                  <span>更新失败：{scope.persistFailedCount}</span>
-                  <span>需要确认：{scope.manualReviewCount}</span>
-                </div>
-                {scope.affectedSources.length > 0 && (
-                  <div className="mt-2 text-xs">影响来源：{scope.affectedSources.join('、')}</div>
-                )}
-                {scope.recoveryAction && <div className="mt-2 text-xs">建议处理：{scope.recoveryAction}</div>}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
 
       <div className="w-full overflow-hidden rounded-3xl border border-orange-50 bg-white/80 shadow-sm backdrop-blur-sm">
         <div className="border-b border-orange-100 px-6 py-5">
@@ -836,45 +669,6 @@ export default function SyncStatus() {
         </div>
       </div>
 
-      <div className="mt-8 w-full rounded-3xl border border-orange-100 bg-white/85 p-5 shadow-sm backdrop-blur-sm sm:p-6">
-        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="flex items-center gap-2 text-lg font-extrabold text-brand-brown sm:text-xl">
-              <Gauge className="h-5 w-5 text-orange-500" />
-              使用情况
-            </h2>
-            <p className="mt-1 text-sm text-brand-gray">
-              按同一网络与终端类型做周期去重，帮助查看页面覆盖情况。
-            </p>
-          </div>
-          <div className="rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">
-            去重统计
-          </div>
-        </div>
-
-        {visitStatsError ? (
-          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-            {visitStatsError}
-          </div>
-        ) : null}
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { label: '今日访问', value: visitStats?.today ?? 0, icon: <Clock className="h-5 w-5" />, tone: 'text-orange-500 bg-orange-100' },
-            { label: '本周访问', value: visitStats?.week ?? 0, icon: <Activity className="h-5 w-5" />, tone: 'text-sky-600 bg-sky-100' },
-            { label: '本月访问', value: visitStats?.month ?? 0, icon: <Sparkles className="h-5 w-5" />, tone: 'text-emerald-600 bg-emerald-100' },
-            { label: '累计访问', value: visitStats?.all ?? 0, icon: <CheckCircle className="h-5 w-5" />, tone: 'text-brand-brown bg-orange-50' },
-          ].map((item) => (
-            <div key={item.label} className="rounded-[26px] border border-orange-100 bg-gradient-to-br from-orange-50/70 to-white p-5">
-              <div className={`mb-4 flex h-11 w-11 items-center justify-center rounded-2xl ${item.tone}`}>
-                {item.icon}
-              </div>
-              <div className="text-sm font-medium text-brand-gray">{item.label}</div>
-              <div className="mt-2 text-3xl font-extrabold text-brand-brown">{item.value}</div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

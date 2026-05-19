@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { expectedWechatAccessVersion, markWechatAccess, sanitizeNextPath } from '../lib/wechatAccess';
 
 function isLocalhost() {
   const host = window.location.hostname;
@@ -22,7 +23,7 @@ export default function WechatGate() {
 
   const next = useMemo(() => {
     const params = new URLSearchParams(loc.search);
-    return params.get('next') || '/';
+    return sanitizeNextPath(params.get('next'));
   }, [loc.search]);
 
   return (
@@ -30,7 +31,7 @@ export default function WechatGate() {
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">关注验证</h1>
         <p className="text-sm text-brand-gray mb-6">
-          仅限关注“七笑果-文体有料”服务号的用户访问。推荐在微信内直接完成服务号验证；若微信授权异常，再使用直达链接或访问码作为兜底方式进入。
+          仅限关注“七笑果-文体有料”服务号的用户访问。推荐在微信内直接完成服务号验证；若微信授权异常，可通过后台留言获取访问码进入。
         </p>
 
         {!isWeChat() && !isLocalhost() && (
@@ -46,11 +47,11 @@ export default function WechatGate() {
         )}
 
         <div className="space-y-4">
-          <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-brand-gray">
+          <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-left text-brand-gray">
             <div className="font-bold text-brand-brown mb-1">推荐进入方式</div>
             <div>1. 在微信中关注服务号“七笑果-文体有料”</div>
             <div>2. 点击下方“微信内一键进入”完成服务号身份验证</div>
-            <div>3. 若授权异常，可回复关键词“比赛生涯”获取直达链接</div>
+            <div>3. 若授权异常，可后台留言，获取访问码</div>
             <div className="mt-2 text-xs">访问码仅作为异常情况下的最后兜底方式。</div>
           </div>
 
@@ -75,7 +76,7 @@ export default function WechatGate() {
             onClick={async () => {
               setError(null);
               if (isLocalhost()) {
-                sessionStorage.setItem('matchlife_wechat_ok', '1');
+                markWechatAccess(expectedWechatAccessVersion(import.meta.env.VITE_WECHAT_ACCESS_VERSION));
                 nav(next, { replace: true });
                 return;
               }
@@ -96,11 +97,10 @@ export default function WechatGate() {
                   setError(json?.error || '访问码错误或已过期');
                   return;
                 }
-                sessionStorage.setItem(
-                  'matchlife_wechat_ok',
+                markWechatAccess(
                   `${json?.version || import.meta.env.VITE_WECHAT_ACCESS_VERSION || new Date().toISOString().slice(0, 10)}`
                 );
-                nav(json?.next || next, { replace: true });
+                nav(sanitizeNextPath(json?.next || next), { replace: true });
               } catch {
                 setError('验证失败，请稍后重试');
               } finally {

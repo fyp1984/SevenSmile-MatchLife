@@ -1,14 +1,13 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Search, Trophy, Calendar, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X, Share2 } from 'lucide-react';
+import { Search, Trophy, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X, Share2 } from 'lucide-react';
 import { getFriendlySupabaseErrorMessage, retrySupabaseOperation, supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 import { DATA_SOURCE_CONTACT_HINT } from '../lib/dataSourceHints';
+import { buildSourceLabelByRaceId, defaultSources, fetchSourcesFromDb, resolveTournamentDisplayName } from '../lib/dataSources';
 import {
   buildMatchDetailPath,
   getPreferredMatchDetailRef,
   getMatchCardClass,
-  getStageBadgeClass,
-  getStageHintClass,
   isPollingPreferred,
 } from '../lib/matchReadModel';
 import ShareModal from '../components/ShareModal';
@@ -124,6 +123,7 @@ export default function Home() {
   const [dateTo, setDateTo] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [tournamentFilter, setTournamentFilter] = useState('');
+  const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
   
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -144,6 +144,26 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadSourceLabels = async () => {
+      try {
+        const dbSources = await fetchSourcesFromDb();
+        if (cancelled) return;
+        setSourceLabelByRaceId(buildSourceLabelByRaceId(dbSources.length ? dbSources : defaultSources));
+      } catch {
+        if (cancelled) return;
+        setSourceLabelByRaceId(buildSourceLabelByRaceId(defaultSources));
+      }
+    };
+
+    void loadSourceLabels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
         window.clearTimeout(debounceTimerRef.current);
@@ -155,6 +175,7 @@ export default function Home() {
     return list
       .map((match) => [
         match.id,
+        match.tournament_name || '',
         match.detail_match_id || '',
         match.detail_match_ref || '',
         match.canonical_match_id || '',
@@ -175,12 +196,27 @@ export default function Home() {
   };
 
   const applyMatches = (list: MatchRow[]) => {
-    const next = [...list];
+    const next = list.map((match) => ({
+      ...match,
+      tournament_name: resolveTournamentDisplayName(match.tournament_name, sourceLabelByRaceId),
+    }));
     const signature = matchesSignature(next);
     if (signature === lastMatchesSignatureRef.current) return;
     lastMatchesSignatureRef.current = signature;
     setMatches(next);
   };
+
+  useEffect(() => {
+    if (!matches.length) return;
+    const next = matches.map((match) => ({
+      ...match,
+      tournament_name: resolveTournamentDisplayName(match.tournament_name, sourceLabelByRaceId),
+    }));
+    const signature = matchesSignature(next);
+    if (signature === lastMatchesSignatureRef.current) return;
+    lastMatchesSignatureRef.current = signature;
+    setMatches(next);
+  }, [sourceLabelByRaceId, matches]);
 
   const fmtDate = (iso: string | null) => {
     if (!iso) return null;
@@ -770,23 +806,13 @@ export default function Home() {
                     {match.round_name && (
                       <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-extrabold">{match.round_name}</span>
                     )}
-                    {match.stage_label && (
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-bold ${getStageBadgeClass(match)}`}
-                      >
-                        {match.stage_label}
+                    {match.start_time ? (
+                      <span className="px-3 py-1 rounded-full bg-white text-brand-gray border border-orange-100 text-xs font-bold">
+                        比赛日期 {format(new Date(match.start_time), 'yyyy-MM-dd')}
                       </span>
-                    )}
-                    <span className="text-sm text-brand-gray">
-                      {match.start_time ? format(new Date(match.start_time), 'yyyy-MM-dd HH:mm') : (match.match_time_name || '-')}
-                    </span>
+                    ) : null}
                   </div>
                   <h3 className="text-lg font-bold text-brand-brown">{match.tournament_name}</h3>
-                  {match.stage_hint && (
-                    <div className={`mt-2 text-sm font-medium ${getStageHintClass(match)}`}>
-                      {match.stage_hint}
-                    </div>
-                  )}
                   {match.winner_side === 'UNKNOWN' && (
                     <div className="flex flex-wrap items-center gap-3 text-xs text-sky-700/80 mt-2 font-medium">
                       {(() => {
@@ -875,36 +901,33 @@ export default function Home() {
       )}
 
       {!searched && (
-        <div className="w-full max-w-5xl mt-24 grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-sm border border-orange-50 hover:shadow-md transition-shadow">
-          <div className="w-12 h-12 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-500 mb-4">
-            <Trophy className="w-6 h-6" />
+        <div className="mt-24 w-full max-w-5xl rounded-[32px] border border-orange-100 bg-white/80 p-6 shadow-sm backdrop-blur-sm sm:p-8">
+          <div className="mb-6 text-center">
+            <h2 className="text-2xl font-extrabold text-brand-brown">更快找到你关心的比赛</h2>
+            <p className="mt-2 text-sm text-brand-gray sm:text-base">
+              支持按赛事、选手和日期检索结果，优先把最有用的信息直接展示给你。
+            </p>
           </div>
-          <h3 className="text-xl font-bold text-brand-brown mb-2">更多赛事</h3>
-          <p className="text-brand-gray text-sm">
-            从当前已上线赛事出发，逐步补充更多比赛与项目内容，一站式查询。
-          </p>
-        </div>
-        
-        <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-sm border border-orange-50 hover:shadow-md transition-shadow">
-          <div className="w-12 h-12 rounded-2xl bg-yellow-100 flex items-center justify-center text-yellow-500 mb-4">
-            <Activity className="w-6 h-6" />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="rounded-3xl border border-orange-100 bg-gradient-to-br from-orange-50/80 to-white p-6 shadow-sm">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-100 text-orange-500">
+                <Trophy className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-bold text-brand-brown">快速查看结果</h3>
+              <p className="mt-2 text-sm text-brand-gray">
+                赛事名称、参赛选手、比分和场地信息集中展示，减少来回翻找。
+              </p>
+            </div>
+            <div className="rounded-3xl border border-orange-100 bg-gradient-to-br from-amber-50/80 to-white p-6 shadow-sm">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-amber-500">
+                <Activity className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-bold text-brand-brown">及时了解进展</h3>
+              <p className="mt-2 text-sm text-brand-gray">
+                比赛进行中时优先展示关键时间和比分变化，方便你快速判断当前进度。
+              </p>
+            </div>
           </div>
-          <h3 className="text-xl font-bold text-brand-brown mb-2">实时赛况</h3>
-          <p className="text-brand-gray text-sm">
-            对正在进行中的比赛持续追踪与更新，帮助你更快掌握比分变化与晋级进展。
-          </p>
-        </div>
-        
-        <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-sm border border-orange-50 hover:shadow-md transition-shadow">
-          <div className="w-12 h-12 rounded-2xl bg-green-100 flex items-center justify-center text-green-500 mb-4">
-            <Calendar className="w-6 h-6" />
-          </div>
-          <h3 className="text-xl font-bold text-brand-brown mb-2">长期战绩</h3>
-          <p className="text-brand-gray text-sm">
-            逐步沉淀运动员与赛事的历史战绩，方便回看长期表现与参赛记录。
-          </p>
-        </div>
       </div>
       )}
 

@@ -1,9 +1,10 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { sanitizeNextPath } from '../lib/wechatAccess';
 
 export default function Follow() {
   const location = useLocation();
-  const next = new URLSearchParams(location.search).get('next') || '/';
+  const next = sanitizeNextPath(new URLSearchParams(location.search).get('next'));
   const oauthStartUrl = `${import.meta.env.BASE_URL}api/wechat/oauth-start?next=${encodeURIComponent(next)}`;
 
   return (
@@ -11,17 +12,17 @@ export default function Follow() {
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">请先关注服务号</h1>
         <p className="text-sm text-brand-gray mb-6">
-          该系统仅限关注“七笑果-文体有料”服务号的用户访问。请先在微信内完成关注，再点击下方按钮重新验证；若自动验证异常，可回复关键词“比赛生涯”获取直达链接或访问码兜底进入。
+          该系统仅限关注“七笑果-文体有料”服务号的用户访问。请先在微信内完成关注，再点击下方按钮重新验证；若自动验证异常，可后台留言获取访问码。
         </p>
 
-        <div className="bg-orange-50 border border-orange-100 rounded-3xl p-6 text-center">
+        <div className="bg-orange-50 border border-orange-100 rounded-3xl p-6 text-left">
           <div className="text-brand-brown font-bold mb-2">操作步骤</div>
           <div className="text-sm text-brand-gray">
             1. 在微信中搜索并关注服务号：七笑果-文体有料
             <br />
             2. 关注完成后点击下方“重新验证进入”
             <br />
-            3. 若仍无法进入，再回复“比赛生涯”获取直达链接或访问码
+            3. 若授权异常，可后台留言，获取访问码
           </div>
         </div>
 
