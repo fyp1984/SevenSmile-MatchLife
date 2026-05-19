@@ -28,6 +28,19 @@ test*.png
 ACCEPTANCE_TEST_GUIDE.md
 *.local
 
+# Local delivery artifacts
+docs/source-*.md
+docs/task-*.md
+scripts/config/*.json
+scripts/lib/canonical-match.mjs
+scripts/lib/observability-gate.mjs
+scripts/lib/source-*.mjs
+scripts/read-model-bench.mjs
+scripts/run-source-orchestrator.mjs
+scripts/task-*-gate.mjs
+scripts/task-*-smoke.mjs
+supabase/.temp/
+
 .env
 .env.*
 !.env.example
