@@ -10,11 +10,16 @@ if (!APPID || !SECRET) {
 }
 
 async function getAccessToken() {
-  const u = new URL('https://api.weixin.qq.com/cgi-bin/token');
-  u.searchParams.set('grant_type', 'client_credential');
-  u.searchParams.set('appid', APPID);
-  u.searchParams.set('secret', SECRET);
-  const r = await fetch(u.toString());
+  const r = await fetch('https://api.weixin.qq.com/cgi-bin/stable_token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      grant_type: 'client_credential',
+      appid: APPID,
+      secret: SECRET,
+      force_refresh: false,
+    }),
+  });
   const j = await r.json();
   if (!j?.access_token) {
     throw new Error(`get token failed: ${JSON.stringify(j)}`);

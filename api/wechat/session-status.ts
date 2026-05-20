@@ -113,27 +113,47 @@ async function getMpAccessToken() {
   if (!APPID || !SECRET) throw new Error('missing mp secret');
   const now = Date.now();
   if (mpTokenCache && mpTokenCache.expireAt - now > 60_000) return mpTokenCache.token;
-  const u = new URL('https://api.weixin.qq.com/cgi-bin/token');
-  u.searchParams.set('grant_type', 'client_credential');
-  u.searchParams.set('appid', APPID);
-  u.searchParams.set('secret', SECRET);
-  const r = await fetch(u.toString());
+  const r = await fetch('https://api.weixin.qq.com/cgi-bin/stable_token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      grant_type: 'client_credential',
+      appid: APPID,
+      secret: SECRET,
+      force_refresh: false,
+    }),
+  });
   const j = await r.json();
   if (!j?.access_token || !j?.expires_in) throw new Error(j?.errmsg || 'token');
   mpTokenCache = { token: j.access_token as string, expireAt: now + Number(j.expires_in) * 1000 };
   return mpTokenCache.token;
 }
 
-async function checkFollowStatus(openid: string) {
-  const token = await getMpAccessToken();
+async function queryFollowStatus(openid: string, accessToken: string) {
   const u = new URL('https://api.weixin.qq.com/cgi-bin/user/info');
-  u.searchParams.set('access_token', token);
+  u.searchParams.set('access_token', accessToken);
   u.searchParams.set('openid', openid);
   u.searchParams.set('lang', 'zh_CN');
   const r = await fetch(u.toString());
   const j = await r.json();
-  if (!r.ok || j?.errcode) throw new Error(j?.errmsg || 'follow-check');
+  if (!r.ok || j?.errcode) {
+    const error = new Error(j?.errmsg || 'follow-check');
+    (error as Error & { errcode?: number }).errcode = Number(j?.errcode || 0);
+    throw error;
+  }
   return Number(j?.subscribe || 0) === 1;
+}
+
+async function checkFollowStatus(openid: string) {
+  const token = await getMpAccessToken();
+  try {
+    return await queryFollowStatus(openid, token);
+  } catch (error) {
+    if ((error as Error & { errcode?: number }).errcode !== 40001) throw error;
+    mpTokenCache = null;
+    const refreshedToken = await getMpAccessToken();
+    return queryFollowStatus(openid, refreshedToken);
+  }
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {

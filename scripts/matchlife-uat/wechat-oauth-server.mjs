@@ -297,15 +297,35 @@ async function getMpAccessToken() {
   if (!APPID || !SECRET) return null;
   const now = Date.now();
   if (mpTokenCache && mpTokenCache.expireAt - now > 60_000) return mpTokenCache.token;
-  const u = new URL('https://api.weixin.qq.com/cgi-bin/token');
-  u.searchParams.set('grant_type', 'client_credential');
-  u.searchParams.set('appid', APPID);
-  u.searchParams.set('secret', SECRET);
-  const r = await fetch(u.toString());
+  const r = await fetch('https://api.weixin.qq.com/cgi-bin/stable_token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      grant_type: 'client_credential',
+      appid: APPID,
+      secret: SECRET,
+      force_refresh: false,
+    }),
+  });
   const j = await r.json();
   if (!j?.access_token || !j?.expires_in) throw new Error(`mp token failed: ${JSON.stringify(j)}`);
   mpTokenCache = { token: j.access_token, expireAt: now + Number(j.expires_in) * 1000 };
   return mpTokenCache.token;
+}
+
+async function queryFollowStatus(openid, accessToken) {
+  const userUrl = new URL('https://api.weixin.qq.com/cgi-bin/user/info');
+  userUrl.searchParams.set('access_token', accessToken);
+  userUrl.searchParams.set('openid', openid);
+  userUrl.searchParams.set('lang', 'zh_CN');
+  const userRes = await fetch(userUrl.toString());
+  const userJson = await userRes.json();
+  if (!userRes.ok || userJson?.errcode) {
+    const error = new Error(`follow-check failed: ${JSON.stringify(userJson)}`);
+    error.errcode = Number(userJson?.errcode || 0);
+    throw error;
+  }
+  return Number(userJson?.subscribe || 0) === 1;
 }
 
 async function checkFollowStatus(openid, options = {}) {
@@ -328,16 +348,16 @@ async function checkFollowStatus(openid, options = {}) {
   }
   const token = await getMpAccessToken();
   if (!token) throw new Error('missing mp app credentials');
-  const userUrl = new URL('https://api.weixin.qq.com/cgi-bin/user/info');
-  userUrl.searchParams.set('access_token', token);
-  userUrl.searchParams.set('openid', openid);
-  userUrl.searchParams.set('lang', 'zh_CN');
-  const userRes = await fetch(userUrl.toString());
-  const userJson = await userRes.json();
-  if (!userRes.ok || userJson?.errcode) {
-    throw new Error(`follow-check failed: ${JSON.stringify(userJson)}`);
+  let subscribed;
+  try {
+    subscribed = await queryFollowStatus(openid, token);
+  } catch (error) {
+    if (error?.errcode !== 40001) throw error;
+    mpTokenCache = null;
+    const refreshedToken = await getMpAccessToken();
+    if (!refreshedToken) throw error;
+    subscribed = await queryFollowStatus(openid, refreshedToken);
   }
-  const subscribed = Number(userJson?.subscribe || 0) === 1;
   if (subscribed) {
     followCache.set(openid, { subscribed: true, checkedAt: Date.now() });
   } else {
