@@ -167,3 +167,4 @@ pnpm sync:orchestrator
 
 - 若页面运行在 HTTPS 下，请优先通过同源 `/7smile-matchlife/supabase/*` 或 `/supabase` 代理访问 PostgREST。
 - 历史环境与自建 PostgREST 仍保留兼容链路，当前对外主入口为 `https://tools.cheersai.cloud/7smile-matchlife/`。
+- 运维、发布与路径基线说明已收敛到 `docs/ops/`，优先阅读 `docs/ops/README.md`、`docs/ops/部署路径基线.md`、`docs/ops/UAT服务器部署与运维手册.md` 与 `docs/ops/生产环境发布方案.md`。

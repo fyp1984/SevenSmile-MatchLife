@@ -52,6 +52,7 @@ const NET_SAMPLE_WINDOW_MS = Number(process.env.MATCHLIFE_NET_SAMPLE_WINDOW_MS |
 const NET_DEFER_INTERVAL_MS = Number(process.env.MATCHLIFE_NET_DEFER_INTERVAL_MS || 20_000);
 const ERROR_BACKOFF_BASE_MS = Number(process.env.MATCHLIFE_ERROR_BACKOFF_BASE_MS || 5_000);
 const ERROR_BACKOFF_MAX_MS = Number(process.env.MATCHLIFE_ERROR_BACKOFF_MAX_MS || 120_000);
+const LOG_MIN_INTERVAL_MS = Number(process.env.MATCHLIFE_LOG_MIN_INTERVAL_MS || 60_000);
 
 const hotCourts = new Map();
 let stopping = false;
@@ -59,9 +60,80 @@ let runtimeState = await readRuntimeState();
 let cachedDefaultIface = NET_IFACE || null;
 let cachedLinkCapacityMbps = NET_CAPACITY_MBPS > 0 ? NET_CAPACITY_MBPS : null;
 let netSample = null;
+let lastPayloadLogAt = 0;
+let lastPayloadLogKey = '';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildPayloadLogSummary(payload) {
+  const sourceResults = Array.isArray(payload?.sourceResults) ? payload.sourceResults : [];
+  const hotCourts = Array.isArray(payload?.hotCourts) ? payload.hotCourts : [];
+  const activeCourts = Array.isArray(payload?.activeCourts) ? payload.activeCourts.length : payload?.activeCourts;
+
+  return {
+    ok: payload?.ok ?? true,
+    kind: payload?.kind ?? 'unknown',
+    raceId: payload?.raceId ?? null,
+    targetCount: payload?.targetCount ?? (sourceResults.length || null),
+    inserted: Number(payload?.inserted || 0),
+    updated: Number(payload?.updated || 0),
+    skipped: Number(payload?.skipped || 0),
+    activeCourts: activeCourts ?? (hotCourts.length || 0),
+    seconds: payload?.seconds ?? null,
+    paused: payload?.paused ?? null,
+    pauseReason: payload?.pauseReason ?? null,
+    ts: payload?.ts ?? new Date().toISOString(),
+  };
+}
+
+function shouldEmitPayloadLog(summary) {
+  const now = Date.now();
+  const changedRows = Number(summary.inserted || 0) + Number(summary.updated || 0);
+  const forceLog =
+    !summary.ok ||
+    summary.paused ||
+    summary.kind === 'paused' ||
+    summary.kind === 'deferred' ||
+    changedRows > 0;
+  const currentKey = JSON.stringify({
+    ok: summary.ok,
+    kind: summary.kind,
+    paused: summary.paused,
+    pauseReason: summary.pauseReason,
+    targetCount: summary.targetCount,
+    inserted: summary.inserted,
+    updated: summary.updated,
+    skipped: summary.skipped,
+    activeCourts: summary.activeCourts,
+  });
+
+  if (forceLog) {
+    lastPayloadLogAt = now;
+    lastPayloadLogKey = currentKey;
+    return true;
+  }
+
+  if (currentKey !== lastPayloadLogKey && now - lastPayloadLogAt >= 15_000) {
+    lastPayloadLogAt = now;
+    lastPayloadLogKey = currentKey;
+    return true;
+  }
+
+  if (now - lastPayloadLogAt >= LOG_MIN_INTERVAL_MS) {
+    lastPayloadLogAt = now;
+    lastPayloadLogKey = currentKey;
+    return true;
+  }
+
+  return false;
+}
+
+function logPayloadSummary(payload) {
+  const summary = buildPayloadLogSummary(payload);
+  if (!shouldEmitPayloadLog(summary)) return;
+  console.log(JSON.stringify(summary));
 }
 
 function parseRaceIdFromSource(rawUrl) {
@@ -331,7 +403,7 @@ async function pauseWatcher(reason, details = {}) {
     state: stateSummary(),
   };
   await writeHeartbeat(payload);
-  console.log(JSON.stringify(payload, null, 2));
+  logPayloadSummary(payload);
   return payload;
 }
 
@@ -503,7 +575,7 @@ async function handleSuccess(summary) {
     state: stateSummary(),
   };
   await writeHeartbeat(payload);
-  console.log(JSON.stringify(payload, null, 2));
+  logPayloadSummary(payload);
   return payload;
 }
 

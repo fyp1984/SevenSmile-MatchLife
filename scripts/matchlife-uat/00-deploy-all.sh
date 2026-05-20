@@ -2,9 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "${PROJECT_ROOT}/../../../.." && pwd)}"
+TECH_SCRIPT_DIR="${TECH_SCRIPT_DIR:-${WORKSPACE_ROOT}/CheersAI/CheersAI - docs/技术/scripts/matchlife-uat}"
 
-"${SCRIPT_DIR}/check-env.sh"
-"${SCRIPT_DIR}/01-build.sh"
-"${SCRIPT_DIR}/02-push.sh"
-"${SCRIPT_DIR}/03-release.sh"
-"${SCRIPT_DIR}/04-monitor.sh"
+if [[ ! -f "${TECH_SCRIPT_DIR}/00-deploy-all.sh" ]]; then
+  echo "missing deploy scripts: ${TECH_SCRIPT_DIR}" >&2
+  exit 1
+fi
+
+exec env PROJECT_ROOT="${PROJECT_ROOT}" "${TECH_SCRIPT_DIR}/00-deploy-all.sh" "$@"

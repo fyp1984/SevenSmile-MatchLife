@@ -47,6 +47,47 @@ if ! id -u "${APP_RUN_USER}" >/dev/null 2>&1; then
   sudo -n useradd -m -s /bin/bash "${APP_RUN_USER}"
 fi
 
+validate_index_base_path() {
+  local index_path="$1"
+  local expected_prefix="$2"
+
+  sudo -n python3 - "${index_path}" "${expected_prefix}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+index_path = Path(sys.argv[1])
+expected_prefix = sys.argv[2]
+
+if not index_path.exists():
+    raise SystemExit(f"missing deployed index: {index_path}")
+
+html = index_path.read_text(encoding='utf-8', errors='ignore')
+asset_paths = re.findall(r'(?:src|href)=["\']([^"\']+)["\']', html, flags=re.I)
+root_assets = sorted({path for path in asset_paths if path.startswith('/') and '/assets/' in path})
+
+if not root_assets:
+    raise SystemExit(f"no rooted asset paths found in {index_path}")
+
+invalid = [path for path in root_assets if not path.startswith(expected_prefix)]
+if invalid:
+    raise SystemExit(
+        "deployed base path mismatch: expected assets under "
+        f"{expected_prefix}, got {', '.join(invalid[:5])}"
+    )
+
+print(f"deployed base path ok: {expected_prefix}")
+PY
+}
+
+sync_owned_file() {
+  local src="$1"
+  local dest="$2"
+  if [[ -f "${src}" ]]; then
+    sudo -n rsync -az "${src}" "${dest}"
+  fi
+}
+
 sudo -n install -d -o "${APP_RUN_USER}" -g "${APP_RUN_USER}" \
   "${APP_HOME}/apps" \
   "${APP_DIR}" \
@@ -66,20 +107,13 @@ sudo -n rsync -az --delete --exclude 'assets/' "${REMOTE_STAGE_DIR}/dist/" "${RE
 sudo -n chmod 755 "${APP_HOME}" "${APP_HOME}/apps" "${APP_DIR}" "${REMOTE_WWW_DIR}" "${REMOTE_WWW_DIR}/assets"
 sudo -n find "${REMOTE_WWW_DIR}" -type d -exec chmod 755 {} +
 sudo -n find "${REMOTE_WWW_DIR}" -type f -exec chmod 644 {} +
+validate_index_base_path "${REMOTE_WWW_DIR}/index.html" "${APP_PATH}/assets/"
 
 if [[ -f "${REMOTE_STAGE_DIR}/${CERT_BASENAME}_bundle.pem" && -f "${REMOTE_STAGE_DIR}/${CERT_BASENAME}.key" ]]; then
   sudo -n install -d "${SSL_DIR}"
   sudo -n rsync -az "${REMOTE_STAGE_DIR}/${CERT_BASENAME}_bundle.pem" "${SSL_DIR}/${CERT_BASENAME}_bundle.pem"
   sudo -n rsync -az "${REMOTE_STAGE_DIR}/${CERT_BASENAME}.key" "${SSL_DIR}/${CERT_BASENAME}.key"
 fi
-
-sync_owned_file() {
-  local src="$1"
-  local dest="$2"
-  if [[ -f "${src}" ]]; then
-    sudo -n rsync -az "${src}" "${dest}"
-  fi
-}
 
 sync_owned_file "${REMOTE_STAGE_DIR}/wechat-oauth-server.mjs" "${RUNTIME_DIR}/wechat-oauth-server.mjs"
 sync_owned_file "${REMOTE_STAGE_DIR}/wechat-follower-sync.mjs" "${RUNTIME_DIR}/wechat-follower-sync.mjs"

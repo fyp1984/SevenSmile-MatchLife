@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_IP="${SERVER_IP:-121.41.195.46}"
-SERVER_SSH_PORT="${SERVER_SSH_PORT:-22}"
-REMOTE_USER="${REMOTE_USER:-cheersai}"
-APP_RUN_USER="${APP_RUN_USER:-sevensmile}"
-APP_SLUG="${APP_SLUG:-7smile-matchlife}"
-REMOTE_STAGE_DIR="${REMOTE_STAGE_DIR:-/home/${REMOTE_USER}/release/staging/${APP_SLUG}}"
-REMOTE_WWW_DIR="${REMOTE_WWW_DIR:-/home/${APP_RUN_USER}/apps/${APP_SLUG}/current}"
-DOMAIN_NAME="${DOMAIN_NAME:-tools.cheersai.cloud}"
-APP_PATH="${APP_PATH:-/${APP_SLUG}}"
-NGINX_SITE_NAME="${NGINX_SITE_NAME:-${DOMAIN_NAME}.conf}"
-ALLOW_HTTP_DIAG="${ALLOW_HTTP_DIAG:-false}"
-SYNC_SERVICE_NAME="${SYNC_SERVICE_NAME:-${APP_SLUG}-sync.service}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "${PROJECT_ROOT}/../../../.." && pwd)}"
+TECH_SCRIPT_DIR="${TECH_SCRIPT_DIR:-${WORKSPACE_ROOT}/CheersAI/CheersAI - docs/技术/scripts/matchlife-uat}"
 
-ssh -p "${SERVER_SSH_PORT}" "${REMOTE_USER}@${SERVER_IP}" \
-  "chmod +x '${REMOTE_STAGE_DIR}/deploy-matchlife.sh' && REMOTE_STAGE_DIR='${REMOTE_STAGE_DIR}' REMOTE_WWW_DIR='${REMOTE_WWW_DIR}' DOMAIN_NAME='${DOMAIN_NAME}' APP_PATH='${APP_PATH}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' APP_RUN_USER='${APP_RUN_USER}' APP_SLUG='${APP_SLUG}' ALLOW_HTTP_DIAG='${ALLOW_HTTP_DIAG}' SYNC_SERVICE_NAME='${SYNC_SERVICE_NAME}' '${REMOTE_STAGE_DIR}/deploy-matchlife.sh'"
+if [[ ! -f "${TECH_SCRIPT_DIR}/03-release.sh" ]]; then
+  echo "missing deploy scripts: ${TECH_SCRIPT_DIR}" >&2
+  exit 1
+fi
 
-echo "release done"
+exec env PROJECT_ROOT="${PROJECT_ROOT}" "${TECH_SCRIPT_DIR}/03-release.sh" "$@"

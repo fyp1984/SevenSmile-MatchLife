@@ -1,11 +1,17 @@
-# MatchLife 部署脚本（Aliyun ECS）
+# MatchLife UAT 兼容入口（Aliyun ECS）
+
+> 当前 `shell` 权威入口已迁移至：
+> `/Users/FYP/Documents/WorkSpace/CheersAI/CheersAI - docs/技术/scripts/matchlife-uat`
+>
+> 本目录保留的 `00-*.sh`、`01-*.sh`、`02-*.sh`、`03-*.sh`、`04-*.sh` 仅作为兼容转发层，避免仓库内历史调用、运维命令、脚本入口立即失效。
+> 运行时源码资产如 `.mjs`、`sync-runtime.package.json`、`systemd/` 仍保留在本仓库，供 Docker / 本地构建 / 发布产物打包使用。
 
 该目录当前用于将 MatchLife 发布到阿里云 ECS `121.41.195.46`，通过共享域名 `tools.cheersai.cloud` 的子路径 `/7smile-matchlife/` 对外提供服务。
 
 说明：
 
 - 当前 `121.41.195.46 + tools.cheersai.cloud/7smile-matchlife` 为临时过渡方案
-- 历史 `175.178.236.183 + 7smile.dlithink.com/match-life` 相关配置先保留，不在本轮拆除或清理范围内
+- 生产环境仍允许使用 `175.178.236.183 + 7smile.dlithink.com/match-life`，但 UAT 发布不得混入 `/match-life/assets/*` 产物
 - 待后期旧主机备案完成后，再统一规划正式迁移与回收
 
 目录内脚本职责：
@@ -34,7 +40,8 @@
 
 - 历史主机：`175.178.236.183`
 - 历史域名：`7smile.dlithink.com`
-- 历史路径：`/match-life/`
+- 生产路径：`/match-life/`
+- 路径基线与仓内运维说明见：`docs/ops/部署路径基线.md`、`docs/ops/2026-05-20-UAT路径与日志修复说明.md`、`docs/ops/UAT服务器部署与运维手册.md`、`docs/ops/生产环境发布方案.md`
 - 当前要求：保持历史环境可追溯、可保留，不做铲除
 
 ## 前置条件
@@ -147,6 +154,7 @@ export APP_BASE_PATH=/7smile-matchlife/
 - 服务名：`7smile-matchlife-sync.service`
 - 运行目录：`/home/sevensmile/release/runtime/7smile-matchlife-sync`
 - 心跳文件：`/home/sevensmile/release/runtime/7smile-matchlife-sync/heartbeat.json`
+- watcher 日志默认输出摘要；可通过 `MATCHLIFE_LOG_MIN_INTERVAL_MS` 控制无增量时的最小打印间隔，默认 `60000`
 
 发布时会自动：
 

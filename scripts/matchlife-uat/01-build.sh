@@ -1,29 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="${PROJECT_ROOT:-/Users/FYP/Documents/WorkSpace/7Smile/subproducts/SevenSmile-MatchLife}"
-APP_BASE_PATH="${APP_BASE_PATH:-/7smile-matchlife/}"
-WECHAT_ACCESS_VERSION="${WECHAT_ACCESS_VERSION:-$(date +%F)}"
-SUPABASE_PROXY_PATH="${SUPABASE_PROXY_PATH:-${APP_BASE_PATH%/}/supabase}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "${PROJECT_ROOT}/../../../.." && pwd)}"
+TECH_SCRIPT_DIR="${TECH_SCRIPT_DIR:-${WORKSPACE_ROOT}/CheersAI/CheersAI - docs/技术/scripts/matchlife-uat}"
 
-cd "${PROJECT_ROOT}"
+if [[ ! -f "${TECH_SCRIPT_DIR}/01-build.sh" ]]; then
+  echo "missing deploy scripts: ${TECH_SCRIPT_DIR}" >&2
+  exit 1
+fi
 
-CI=1 pnpm install --frozen-lockfile --force
-APP_BASE_PATH="${APP_BASE_PATH}" \
-SUPABASE_PROXY_PATH="${SUPABASE_PROXY_PATH}" \
-VITE_SUPABASE_PROXY_PATH="${SUPABASE_PROXY_PATH}" \
-VITE_WECHAT_ACCESS_VERSION="${WECHAT_ACCESS_VERSION}" \
-VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-}" \
-VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-}" \
-pnpm exec tsc -b
-
-APP_BASE_PATH="${APP_BASE_PATH}" \
-SUPABASE_PROXY_PATH="${SUPABASE_PROXY_PATH}" \
-VITE_SUPABASE_PROXY_PATH="${SUPABASE_PROXY_PATH}" \
-VITE_WECHAT_ACCESS_VERSION="${WECHAT_ACCESS_VERSION}" \
-VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-}" \
-VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-}" \
-pnpm exec vite build --base "${APP_BASE_PATH}"
-
-test -d dist
-echo "build ok: ${PROJECT_ROOT}/dist"
+exec env PROJECT_ROOT="${PROJECT_ROOT}" "${TECH_SCRIPT_DIR}/01-build.sh" "$@"
