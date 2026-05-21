@@ -24,7 +24,7 @@ export function checkIsWechatBrowser(): boolean {
 }
 
 export function getIsWechatBrowser(): boolean {
-  return isWechatBrowser;
+  return checkIsWechatBrowser();
 }
 
 export async function initWechatSDK(config: WechatConfigParams): Promise<boolean> {

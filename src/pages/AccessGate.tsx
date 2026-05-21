@@ -45,22 +45,22 @@ export default function AccessGate() {
       nav(nextPath);
       return;
     }
-    setError('口令不正确');
+    setError('访问码不正确，请重试');
   };
 
   return (
     <div className="max-w-lg mx-auto pt-10">
       <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">更新状态访问验证</h1>
-        <p className="text-sm text-brand-gray mb-6">当前版本使用口令校验代替七笑果 SSO 登录。</p>
+        <p className="text-sm text-brand-gray mb-6">输入访问码后即可继续查看更新状态。</p>
 
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label className="block text-sm font-bold text-brand-brown mb-2">请输入口令</label>
+            <label className="block text-sm font-bold text-brand-brown mb-2">请输入访问码</label>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="口令"
+              placeholder="访问码"
               className="w-full px-4 py-3 rounded-2xl border border-orange-100 bg-white focus:outline-none focus:ring-2 focus:ring-orange-200 text-brand-brown"
               type="password"
               autoFocus
@@ -75,7 +75,7 @@ export default function AccessGate() {
             type="submit"
             className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all"
           >
-            进入更新状态
+            继续查看
           </button>
         </form>
       </div>

@@ -194,9 +194,9 @@ export default function SyncStatus() {
     const base =
       kind === 'reset'
         ? payload?.resetApplied === false
-          ? '本次已改为执行全量更新。'
-          : '已发起清空后重载，请稍后查看下方最新结果。'
-        : '已发起本次更新，请稍后查看下方最新结果。';
+          ? '本次已改为完整更新。'
+          : '已开始重新整理，请稍后查看结果。'
+        : '已开始更新，请稍后查看结果。';
     setActionMsg({
       tone: warning ? 'warning' : 'success',
       text: warning ? `${base}${warning}` : base,
@@ -229,7 +229,7 @@ export default function SyncStatus() {
           hasServiceRoleKey === false
             ? '请在 `.env.local` 填写 SUPABASE_SERVICE_ROLE_KEY（仅本地，不提交）。'
             : '请检查本地开发服务器日志。';
-        setErrorMsg(`本地同步失败：${String(e)}。${localHint}`);
+        setErrorMsg(`本地更新失败，请稍后重试。${localHint}`);
         setSyncing(false);
         return;
       }
@@ -240,7 +240,7 @@ export default function SyncStatus() {
           hasServiceRoleKey === false
             ? '请在 `.env.local` 填写 SUPABASE_SERVICE_ROLE_KEY（仅本地，不提交）。'
             : '请检查本地开发服务器日志。';
-        setErrorMsg(`本地同步失败：${String(parsed.error ?? localRes.status)}。${localHint}`);
+        setErrorMsg(`本地更新失败，请稍后重试。${localHint}`);
         setSyncing(false);
         return;
       }
@@ -261,15 +261,14 @@ export default function SyncStatus() {
           headers: buildRemoteSyncHeaders(mode),
         });
         if (fallbackRes.status === 409) {
-          // A sync job is already running on server; treat as an in-progress state instead of hard error.
-          setActionMsg({ tone: 'warning', text: '已有更新任务正在执行中，请稍后刷新下方结果。' });
+          setActionMsg({ tone: 'warning', text: '已有更新正在进行中，请稍后再看。' });
           scheduleObservabilityRefresh();
           setSyncing(false);
           return;
         }
         if (!fallbackRes.ok) {
           const parsed = await parseActionResponse(fallbackRes);
-          setErrorMsg(`未能发起本次更新，请稍后重试。${parsed.error ? `原因：${String(parsed.error)}` : ''}`);
+          setErrorMsg(`这次更新没有成功开始，请稍后重试。${parsed.error ? ` ${String(parsed.error)}` : ''}`);
           setSyncing(false);
           return;
         }
@@ -283,15 +282,14 @@ export default function SyncStatus() {
             headers: buildRemoteSyncHeaders(mode),
           });
           if (fallbackRes.status === 409) {
-            setActionMsg({ tone: 'warning', text: '已有更新任务正在执行中，请稍后刷新下方结果。' });
+            setActionMsg({ tone: 'warning', text: '已有更新正在进行中，请稍后再看。' });
             scheduleObservabilityRefresh();
             setSyncing(false);
             return;
           }
           if (!fallbackRes.ok) {
             const parsed = await parseActionResponse(fallbackRes);
-            const msg = e instanceof Error ? e.message : String(e);
-            setErrorMsg(`未能发起本次更新，请稍后重试。${parsed.error ? `原因：${String(parsed.error)}` : ''}`);
+            setErrorMsg(`这次更新没有成功开始，请稍后重试。${parsed.error ? ` ${String(parsed.error)}` : ''}`);
             setSyncing(false);
             return;
           }
@@ -299,7 +297,7 @@ export default function SyncStatus() {
           updateActionMessage('update', parsed);
         } catch (fallbackError: unknown) {
           const fb = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          setErrorMsg(`未能发起本次更新，请稍后重试。${fb ? `原因：${fb}` : ''}`);
+          setErrorMsg(`这次更新没有成功开始，请稍后重试。${fb ? ` ${fb}` : ''}`);
           setSyncing(false);
           return;
         }
@@ -322,14 +320,14 @@ export default function SyncStatus() {
           headers: buildRemoteSyncHeaders('full'),
         });
         if (remoteRes.status === 409) {
-          setActionMsg({ tone: 'warning', text: '已有更新任务正在执行中，请稍后刷新下方结果。' });
+          setActionMsg({ tone: 'warning', text: '已有更新正在进行中，请稍后再看。' });
           scheduleObservabilityRefresh();
           setSyncing(false);
           return;
         }
         if (!remoteRes.ok) {
           const parsed = await parseActionResponse(remoteRes);
-          setErrorMsg(`未能发起清空后重载，请稍后重试。${parsed.error ? `原因：${String(parsed.error)}` : ''}`);
+          setErrorMsg(`重新整理没有成功开始，请稍后重试。${parsed.error ? ` ${String(parsed.error)}` : ''}`);
           setSyncing(false);
           return;
         }
@@ -339,7 +337,7 @@ export default function SyncStatus() {
         setSyncing(false);
         return;
       } catch (error) {
-        setErrorMsg(`未能发起清空后重载，请稍后重试。${error instanceof Error ? `原因：${error.message}` : ''}`);
+        setErrorMsg(`重新整理没有成功开始，请稍后重试。${error instanceof Error ? ` ${error.message}` : ''}`);
         setSyncing(false);
         return;
       }
@@ -353,7 +351,7 @@ export default function SyncStatus() {
         hasServiceRoleKey === false
           ? '需要在 `.env.local` 配置 SUPABASE_SERVICE_ROLE_KEY 才能清空重建（仅本地，不提交）。'
           : '';
-      setErrorMsg(`清空数据失败：${String(e)}。${localHint}`);
+      setErrorMsg(`重新整理前的清空失败，请稍后重试。${localHint}`);
       setSyncing(false);
       return;
     }
@@ -363,7 +361,7 @@ export default function SyncStatus() {
         hasServiceRoleKey === false
           ? '需要在 `.env.local` 配置 SUPABASE_SERVICE_ROLE_KEY 才能清空重建（仅本地，不提交）。'
           : '';
-      setErrorMsg(`清空数据失败：${String(parsed.error ?? res.status)}。${localHint}`);
+      setErrorMsg(`重新整理前的清空失败，请稍后重试。${localHint}`);
       setSyncing(false);
       return;
     }
@@ -458,18 +456,18 @@ export default function SyncStatus() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col items-center pb-20 pt-4 sm:pt-6">
-      <div className="mb-8 flex w-full flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+    <div className="mx-auto flex w-full max-w-5xl flex-col items-center pb-16 pt-4 sm:pt-6">
+      <div className="mb-6 flex w-full flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="mb-2 text-2xl font-extrabold text-brand-brown sm:text-3xl">更新状态</h1>
           <p className="max-w-2xl text-sm leading-6 text-brand-gray sm:text-base">
-            查看最近一次更新是否顺利、哪些赛事还在整理中，以及建议处理方式。
+            这里可以快速看最近更新是否顺利、哪些内容还在整理。
           </p>
         </div>
         <div className="flex items-center gap-2 self-start rounded-full border border-orange-100 bg-white/85 px-2 py-2 shadow-sm backdrop-blur-sm">
           <ActionIconButton
             title="立即更新"
-            hint="立即刷新当前已启用赛事，获取最新比赛结果。"
+            hint="立即查看当前赛事的最新结果。"
             onClick={() => triggerSync('full')}
             disabled={syncing}
             loading={syncing}
@@ -477,23 +475,23 @@ export default function SyncStatus() {
             icon={<RefreshCw className="h-4 w-4" />}
           />
           <ActionIconButton
-            title="清空后重载"
-            hint="先清空当前数据，再重新完整更新一次。"
+            title="重新整理"
+            hint="从头再整理一次当前数据。"
             onClick={resetAndSync}
             disabled={syncing}
             danger
             icon={<Trash2 className="h-4 w-4" />}
           />
           <ActionIconButton
-            title={autoSync ? '停止自动刷新(30s)' : '自动刷新(30s)'}
-            hint={autoSync ? '已开启自动刷新，每 30 秒拉取一次最新结果。' : '开启后每 30 秒自动刷新一次结果。'}
+            title={autoSync ? '停止自动查看' : '自动查看'}
+            hint={autoSync ? '已开启自动查看，每 30 秒更新一次。' : '开启后每 30 秒自动更新一次。'}
             onClick={() => setAutoSync((v) => !v)}
             active={autoSync}
             icon={<Sparkles className="h-4 w-4" />}
           />
           <ActionIconButton
             title="刷新状态"
-            hint="重新读取最新状态，不会触发新的更新任务。"
+            hint="只更新当前页面显示，不会重新开始整理。"
             onClick={() => {
               void loadObservability();
             }}
@@ -505,13 +503,13 @@ export default function SyncStatus() {
 
       {autoSync && (
         <div className="mb-4 w-full rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm font-medium text-emerald-700">
-          自动刷新已开启，每 30 秒检查一次最新结果。最近一次刷新：{autoTickAt ? format(new Date(autoTickAt), 'HH:mm:ss') : '-'}
+          自动刷新已开启，每 30 秒检查一次。最近一次：{autoTickAt ? format(new Date(autoTickAt), 'HH:mm:ss') : '-'}
         </div>
       )}
 
       {activeSource && (
         <div className="mb-4 w-full rounded-2xl border border-sky-100 bg-sky-50/60 px-4 py-3 text-sm text-sky-700">
-          当前更新赛事：<span className="font-bold">{activeSource.name}</span>
+          当前更新对象：<span className="font-bold">{activeSource.name}</span>
         </div>
       )}
 
@@ -538,7 +536,7 @@ export default function SyncStatus() {
           {
             label: '当前状态',
             value: summary ? getStatusLabel(summary.overallStatus) : '-',
-            hint: runtime ? runtime.summary || '暂无告警' : '等待加载',
+            hint: runtime ? runtime.summary || '当前状态正常' : '正在准备',
             tone: summary ? getStatusTone(summary.overallStatus) : 'text-brand-brown bg-orange-50 border-orange-100',
             icon: <ShieldAlert className="h-5 w-5" />,
           },
@@ -555,21 +553,21 @@ export default function SyncStatus() {
           {
             label: '最近更新',
             value: formatDateTime(runtime?.lastPersistedAt || runtime?.lastSourceUpdatedAt),
-            hint: runtime?.summary || '等待最新更新结果',
+            hint: runtime?.summary || '等待最新结果',
             tone: 'text-sky-600 bg-sky-100 border-sky-200',
             icon: <Activity className="h-5 w-5" />,
           },
           {
             label: '待处理比赛',
             value: (runtime?.pendingPersistCount ?? 0) + (runtime?.manualReviewCount ?? 0),
-            hint: runtime ? `数据刷新延迟：${formatSecondsRough(runtime.sourceLagSeconds)}` : '-',
+            hint: runtime ? `当前延迟：${formatSecondsRough(runtime.sourceLagSeconds)}` : '-',
             tone: 'text-amber-600 bg-amber-100 border-amber-200',
             icon: <Gauge className="h-5 w-5" />,
           },
           {
             label: '更新失败',
             value: runtime?.persistFailedCount ?? 0,
-            hint: runtime?.recoveryAction || '当前没有需要额外处理的问题',
+            hint: runtime?.recoveryAction || '当前没有额外问题',
             tone:
               (runtime?.persistFailedCount || 0) > 0
                 ? 'text-red-700 bg-red-50 border-red-200'
@@ -600,28 +598,28 @@ export default function SyncStatus() {
             <Clock className="h-5 w-5 text-orange-500" />
             最近更新记录
           </h2>
-          <p className="mt-1 text-sm text-brand-gray">展示最近一次次更新结果，方便确认是否正常完成。</p>
+          <p className="mt-1 text-sm text-brand-gray">快速查看最近几次更新结果。</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-orange-100 bg-orange-50/50 text-brand-brown">
-                <th className="p-4 font-bold">同步时间</th>
+                <th className="p-4 font-bold">时间</th>
                 <th className="p-4 font-bold">来源</th>
                 <th className="p-4 font-bold">状态</th>
-                <th className="p-4 font-bold">异常环节</th>
-                <th className="p-4 font-bold">更新量</th>
-                <th className="p-4 font-bold">处理建议</th>
+                <th className="p-4 font-bold">说明</th>
+                <th className="p-4 font-bold">结果</th>
+                <th className="p-4 font-bold">建议</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-orange-500">加载中...</td>
+                  <td colSpan={6} className="p-8 text-center text-orange-500">正在加载...</td>
                 </tr>
               ) : recentRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-brand-gray">暂无运行记录</td>
+                  <td colSpan={6} className="p-8 text-center text-brand-gray">暂时还没有更新记录</td>
                 </tr>
               ) : (
                 recentRuns.map((run) => (

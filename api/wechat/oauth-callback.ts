@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { ACCESS_VERSION, issueFollowSession, setAccessCookie, signValue } from './_access';
 
 function safeNext(next: string | null) {
   const v = (next || '/').trim();
@@ -23,18 +24,7 @@ type VercelRes = {
   end: (body?: string) => void;
 };
 
-const ACCESS_COOKIE = 'matchlife_wechat_ok';
-const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
-const ACCESS_SESSION_COOKIE = 'matchlife_wechat_session';
-const ACCESS_VERSION =
-  `${process.env.WECHAT_ACCESS_VERSION || process.env.VITE_WECHAT_ACCESS_VERSION || ''}`.trim() ||
-  new Date().toISOString().slice(0, 10);
 const STRICT_FOLLOW_CHECK = process.env.WECHAT_STRICT_FOLLOW_CHECK === 'true';
-const SIGNING_SECRET =
-  process.env.WECHAT_ACCESS_LINK_SECRET ||
-  process.env.WECHAT_MP_SECRET ||
-  process.env.WECHAT_ACCESS_CODES ||
-  'matchlife-dev-secret';
 
 type WechatOauthResp = {
   errcode?: number;
@@ -81,41 +71,12 @@ function toAppUrl(origin: string, path: string) {
   return `${origin}${getAppBasePath()}${normalizedPath}`;
 }
 
-function signValue(value: string) {
-  return crypto.createHmac('sha256', SIGNING_SECRET).update(value).digest('hex');
-}
-
 function base64url(input: string) {
   return Buffer.from(input, 'utf8')
     .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/g, '');
-}
-
-function issueAccessSessionCookie(openid: string) {
-  if (!openid) return '';
-  const payload = {
-    o: openid,
-    v: ACCESS_VERSION,
-    i: Date.now(),
-    e: Date.now() + 7 * 24 * 60 * 60 * 1000,
-  };
-  const encoded = base64url(JSON.stringify(payload));
-  return `${encoded}.${signValue(encoded)}`;
-}
-
-function setAccessCookie(res: VercelRes, enabled: boolean, openid = '') {
-  const maxAge = enabled ? 7 * 24 * 60 * 60 : 0;
-  const value = enabled ? '1' : '';
-  const version = enabled ? ACCESS_VERSION : '';
-  const session = enabled ? issueAccessSessionCookie(openid) : '';
-  const path = getAppBasePath() || '/';
-  res.setHeader('Set-Cookie', [
-    `${ACCESS_COOKIE}=${value}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_VERSION_COOKIE}=${version}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_SESSION_COOKIE}=${session}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-  ] as unknown as string);
 }
 
 let cachedMpToken: { token: string; expireAt: number } | null = null;
@@ -217,7 +178,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
 
     res.statusCode = 302;
     if (subscribed) {
-      setAccessCookie(res, true, openid);
+      setAccessCookie(res, true, issueFollowSession(openid));
       res.setHeader('Location', `${toAppUrl(origin, '/wechat/complete')}?ok=1&next=${encodeURIComponent(next)}`);
     } else {
       setAccessCookie(res, false);

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Outlet, Link, NavLink } from 'react-router-dom';
-import { BarChart3, BookOpen, Database, House, RefreshCw, Trophy, X } from 'lucide-react';
+import { BarChart3, BookOpen, Database, House, RefreshCw, Trophy } from 'lucide-react';
 import logoImg from '../assets/logo.svg';
 import { useVisitTracker } from '../hooks/useVisitTracker';
 import SportTabBar from './SportTabBar';
+import FollowQrModal from './FollowQrModal';
 
 export default function Layout() {
   useVisitTracker();
@@ -83,46 +84,7 @@ export default function Layout() {
         <p className="mt-3">© {new Date().getFullYear()} 七笑果-赛事生涯</p>
       </footer>
 
-      {followModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-          onClick={() => setFollowModalOpen(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-[28px] border border-orange-100 bg-white p-6 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-extrabold text-brand-brown">关注公众号</h2>
-                <p className="mt-2 text-sm leading-6 text-brand-gray">
-                  微信扫码关注“七笑果-文体中心”公众号，获取最新内容与访问指引。
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setFollowModalOpen(false)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-orange-50 text-brand-brown transition-colors hover:bg-orange-100"
-                aria-label="关闭关注提示"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="rounded-3xl border border-orange-100 bg-gradient-to-b from-orange-50 to-white p-4">
-              <img
-                src={`${import.meta.env.BASE_URL}sevensmile-wechat-qrcode.jpg`}
-                alt="七笑果-文体中心公众号二维码"
-                className="mx-auto w-full max-w-[280px] rounded-2xl bg-white"
-              />
-            </div>
-
-            <p className="mt-4 text-center text-xs leading-5 text-brand-gray">
-              扫码后可在公众号内获取后续通知与访问入口。
-            </p>
-          </div>
-        </div>
-      )}
+      <FollowQrModal open={followModalOpen} onClose={() => setFollowModalOpen(false)} />
     </div>
   );
 }

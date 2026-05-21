@@ -19,6 +19,13 @@ type Match = {
   start_time: string | null;
 };
 
+function getReputationLevelLabel(level?: string | null) {
+  if (level === 'expert') return '熟练';
+  if (level === 'advanced') return '进阶';
+  if (level === 'intermediate') return '稳定';
+  return '新手';
+}
+
 export default function MatchTagging() {
   const { matchId } = useParams<{ matchId: string }>();
   const navigate = useNavigate();
@@ -260,15 +267,15 @@ export default function MatchTagging() {
               <Award className="w-6 h-6 text-orange-500" />
             </div>
             <div>
-              <div className="text-sm text-brand-gray">信誉等级</div>
+              <div className="text-sm text-brand-gray">记录等级</div>
               <div className="text-xl font-extrabold text-brand-brown">
-                {loadingUserReputation ? '加载中...' : userReputation?.reputation_level || 'beginner'}
+                {loadingUserReputation ? '加载中...' : getReputationLevelLabel(userReputation?.reputation_level)}
               </div>
             </div>
           </div>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-brand-gray">总标签数</span>
+              <span className="text-brand-gray">总记录数</span>
               <span className="font-bold text-brand-brown">{loadingUserReputation ? '...' : userReputation?.total_tags || 0}</span>
             </div>
             <div className="flex justify-between">
@@ -297,7 +304,7 @@ export default function MatchTagging() {
             </div>
           </div>
           <div className="text-sm text-brand-gray">
-            当前环境支持匿名记录员录入，保存后会累计到本地信誉分
+            记录会自动累计到当前设备。
           </div>
         </div>
 
@@ -356,7 +363,7 @@ export default function MatchTagging() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索技术标签..."
+                placeholder="搜索标签"
                 className="w-full px-4 py-3 rounded-2xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 placeholder-orange-300"
               />
             </div>
@@ -364,7 +371,7 @@ export default function MatchTagging() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="block text-sm font-bold text-brand-brown">
-                  选择标签 <span className="text-xs text-brand-gray font-normal ml-1">支持组合多选</span>
+                  选择标签 <span className="text-xs text-brand-gray font-normal ml-1">可多选</span>
                 </label>
                 {selectedTagIds.length > 0 && (
                   <button 
@@ -379,6 +386,7 @@ export default function MatchTagging() {
                 {loadingAvailableTags ? (
                   <div className="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-6 text-center text-sm text-brand-gray">
                     正在加载可选标签...
+                    正在准备可选标签...
                   </div>
                 ) : Object.keys(groupedTags).length === 0 ? (
                   <div className="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-6 text-center text-sm text-brand-gray">
@@ -414,13 +422,13 @@ export default function MatchTagging() {
               <div>
                 <label className="block text-sm font-bold text-brand-brown mb-2">
                   <Video className="w-4 h-4 inline mr-1" />
-                  视频时间戳（秒）
+                  视频时间（秒）
                 </label>
                 <input
                   type="number"
                   value={videoTimestamp || ''}
                   onChange={(e) => setVideoTimestamp(e.target.value ? Number(e.target.value) : null)}
-                  placeholder="例如：125"
+                  placeholder="例如 125"
                   className="w-full px-4 py-3 rounded-2xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
                 />
               </div>
@@ -433,7 +441,7 @@ export default function MatchTagging() {
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="添加备注信息..."
+                placeholder="补充一点说明"
                 rows={3}
                 className="w-full px-4 py-3 rounded-2xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 placeholder-orange-300 resize-none"
               />
@@ -449,7 +457,7 @@ export default function MatchTagging() {
               ) : (
                 <>
                   <Save className="w-5 h-5" />
-                  保存 {selectedTagIds.length > 1 ? `${selectedTagIds.length} 个` : ''}标签
+                  保存{selectedTagIds.length > 1 ? `${selectedTagIds.length}条` : ''}记录
                 </>
               )}
             </button>
@@ -459,13 +467,13 @@ export default function MatchTagging() {
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 border border-orange-100 shadow-sm">
           <h2 className="text-xl font-bold text-brand-brown mb-4 flex items-center gap-2">
             <Clock className="w-5 h-5 text-orange-500" />
-            已录入标签 ({tags.length})
+            已添加记录 ({tags.length})
           </h2>
 
           <div className="space-y-3 max-h-[600px] overflow-y-auto">
             {tags.length === 0 ? (
               <div className="text-center py-12 text-brand-gray">
-                {loadingMatchTags ? '正在加载已录入标签...' : '暂无标签，开始录入吧'}
+                {loadingMatchTags ? '正在加载记录...' : '还没有记录，开始添加吧'}
               </div>
             ) : (
               tags.map((tag) => (
@@ -522,14 +530,14 @@ export default function MatchTagging() {
                           value={notes}
                           onChange={(e) => setNotes(e.target.value)}
                           rows={3}
-                          placeholder="补充该标签备注..."
+                          placeholder="补充一点说明"
                           className="w-full px-3 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300 resize-none"
                         />
                         <input
                           type="number"
                           value={videoTimestamp ?? ''}
                           onChange={(e) => setVideoTimestamp(e.target.value ? Number(e.target.value) : null)}
-                          placeholder="视频时间戳（秒）"
+                          placeholder="视频时间（秒）"
                           className="w-full px-3 py-2 rounded-xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
                         />
                         <div className="flex gap-2">

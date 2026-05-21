@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { sanitizeNextPath } from '../lib/wechatAccess';
 
 export default function Follow() {
@@ -9,36 +9,27 @@ export default function Follow() {
 
   return (
     <div className="max-w-lg mx-auto pt-10">
-      <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-sm border border-orange-50">
+      <div className="bg-white/80 backdrop-blur-sm rounded-3xl border border-orange-50 p-6 shadow-sm sm:p-8">
         <h1 className="text-2xl font-extrabold text-brand-brown mb-2">请先关注服务号</h1>
-        <p className="text-sm text-brand-gray mb-6">
-          该系统仅限关注“七笑果-文体中心”服务号的用户访问。请先在微信内完成关注，再点击下方按钮重新验证；若自动验证异常，可回复关键词“比赛生涯”获取直达链接，或后台留言获取访问码。
+        <p className="mb-5 text-sm text-brand-gray">
+          先关注“七笑果-文体中心”，再回来完成进入。
         </p>
 
-        <div className="bg-orange-50 border border-orange-100 rounded-3xl p-6 text-left">
-          <div className="text-brand-brown font-bold mb-2">操作步骤</div>
-          <div className="text-sm text-brand-gray">
-            1. 在微信中搜索并关注服务号：七笑果-文体中心
-            <br />
-            2. 关注完成后点击下方“重新验证进入”
-            <br />
-            3. 若仍无法进入，可回复“比赛生涯”获取直达链接，或后台留言获取访问码
+        <div className="rounded-3xl border border-orange-100 bg-orange-50 p-5 text-left">
+          <div className="mb-2 font-bold text-brand-brown">进入方式</div>
+          <div className="space-y-1 text-sm text-brand-gray">
+            <div>1. 在微信里关注“七笑果-文体中心”</div>
+            <div>2. 关注后点击下方按钮继续进入</div>
           </div>
         </div>
 
-        <div className="mt-5 space-y-3">
+        <div className="mt-4 space-y-3">
           <a
             href={oauthStartUrl}
             className="block w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-full font-bold shadow-md hover:shadow-lg hover:from-orange-400 hover:to-red-400 transition-all text-center"
           >
-            重新验证进入
+            我已关注，继续进入
           </a>
-          <Link
-            to={`/gate/wechat?next=${encodeURIComponent(next)}`}
-            className="block w-full border border-orange-200 text-brand-brown py-3 rounded-full font-bold text-center hover:bg-orange-50 transition-all"
-          >
-            使用直达链接/访问码兜底
-          </Link>
         </div>
       </div>
     </div>

@@ -68,8 +68,20 @@ type PlayerActionModalState =
   | { mode: 'delete'; profile: PlayerProfile }
   | null;
 
+function getSourceTypeLabel(type: SourceItem['type']) {
+  if (type === 'html') return '页面';
+  if (type === 'file') return '文件';
+  return '接口';
+}
+
+function getFormatLabel(format: SourceItem['format']) {
+  if (format === 'ymq-json') return 'YMQ 赛事';
+  if (format === 'tennis-json') return '网球赛事';
+  return '通用格式';
+}
+
 function getPasswordVerificationMessage(valid: boolean, actionLabel: string) {
-  return valid ? '' : `数据源密码不正确，已取消${actionLabel}。`;
+  return valid ? '' : `访问密码不正确，已取消${actionLabel}。`;
 }
 
 function normalizeImportedSources(payload: unknown): SourceItem[] {
@@ -220,7 +232,7 @@ export default function DataSources() {
         setPlayerProfiles(playerItems);
       } catch (e) {
         if (!cancelled) {
-          setSourceError(`数据库读取失败，已使用本地草稿：${getErrorMessage(e)}`);
+          setSourceError(`读取失败，已先显示本地内容。${getErrorMessage(e)}`);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -265,11 +277,11 @@ export default function DataSources() {
     };
 
     void persistSources([nextItem, ...sources]).catch((e) =>
-      setSourceError(`保存到数据库失败：${getErrorMessage(e)}`),
+      setSourceError(`保存失败，请稍后重试。${getErrorMessage(e)}`),
     );
     setName('');
     setUrl('');
-    setSourceMessage('数据源已保存并持久化入库。');
+    setSourceMessage('数据源已保存。');
     setSourceSaved(true);
     if (sourceFeedbackTimerRef.current) window.clearTimeout(sourceFeedbackTimerRef.current);
     sourceFeedbackTimerRef.current = window.setTimeout(() => setSourceSaved(false), 3000);
@@ -282,7 +294,7 @@ export default function DataSources() {
         : item,
     );
     void persistSources(next).catch((e) =>
-      setSourceError(`更新数据源状态失败：${getErrorMessage(e)}`),
+      setSourceError(`更新状态失败，请稍后重试。${getErrorMessage(e)}`),
     );
   };
 
@@ -291,7 +303,7 @@ export default function DataSources() {
     setSources(next);
     saveSourcesToLocal(next);
     void deleteSourceFromDb(id).catch((e) =>
-      setSourceError(`删除数据源失败：${getErrorMessage(e)}`),
+      setSourceError(`删除失败，请稍后重试。${getErrorMessage(e)}`),
     );
   };
 
@@ -305,7 +317,7 @@ export default function DataSources() {
       const text = await file.text();
       const imported = normalizeImportedSources(JSON.parse(text));
       if (imported.length === 0) {
-        throw new Error('未识别到可导入的数据源，请使用已适配的 JSON 配置格式。');
+        throw new Error('没有识别到可导入的数据源，请检查文件内容。');
       }
 
       const merged = [...imported, ...sources].filter(
@@ -316,9 +328,9 @@ export default function DataSources() {
       await upsertSourcesToDb(merged);
       setSources(merged);
       saveSourcesToLocal(merged);
-      setSourceMessage(`已导入 ${imported.length} 个数据源配置。`);
+      setSourceMessage(`已导入 ${imported.length} 个数据源。`);
     } catch (err) {
-      setSourceError(err instanceof Error ? err.message : '导入失败，请检查文件格式。');
+      setSourceError(err instanceof Error ? err.message : '导入失败，请检查文件。');
     } finally {
       event.target.value = '';
     }
@@ -334,7 +346,7 @@ export default function DataSources() {
     }
 
     if (editingPlayerId && !editPasswordVerified) {
-      setPlayerError('请先点击对应选手的编辑按钮，并在密码确认弹层中完成验证后再保存。');
+      setPlayerError('请先完成编辑确认，再保存。');
       return;
     }
 
@@ -366,12 +378,12 @@ export default function DataSources() {
       setPlayerGender('');
       setEditingPlayerId(null);
       setEditPasswordVerified(false);
-      setPlayerMessage(editingPlayerId ? '选手档案已更新。' : '选手档案已写入数据库。');
+      setPlayerMessage(editingPlayerId ? '资料已更新。' : '资料已保存。');
       setPlayerSaved(true);
       if (playerFeedbackTimerRef.current) window.clearTimeout(playerFeedbackTimerRef.current);
       playerFeedbackTimerRef.current = window.setTimeout(() => setPlayerSaved(false), 3000);
     } catch (e) {
-      setPlayerError(`保存选手档案失败：${getErrorMessage(e)}`);
+      setPlayerError(`保存失败，请稍后重试。${getErrorMessage(e)}`);
     }
   };
 
@@ -388,7 +400,7 @@ export default function DataSources() {
     
     // Scroll to the form
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    setPlayerMessage('已将选手信息填入表单，可直接修改并保存。');
+    setPlayerMessage('已载入当前资料，可直接修改。');
   };
 
   const openPlayerActionModal = (mode: 'edit' | 'delete', profile: PlayerProfile) => {
@@ -410,7 +422,7 @@ export default function DataSources() {
     const actionLabel = playerActionModal.mode === 'edit' ? '编辑' : '删除';
     const trimmedPassword = playerActionPassword.trim();
     if (!trimmedPassword) {
-      setPlayerActionError('请输入数据源密码。');
+      setPlayerActionError('请输入访问密码。');
       return;
     }
 
@@ -435,13 +447,13 @@ export default function DataSources() {
         if (editingPlayerId === playerActionModal.profile.id) setEditingPlayerId(null);
         if (editingPlayerId === playerActionModal.profile.id) setEditPasswordVerified(false);
         setPlayerProfiles((current) => current.filter((p) => p.id !== playerActionModal.profile.id));
-        setPlayerMessage(`已成功删除选手档案。`);
+        setPlayerMessage('资料已删除。');
       }
       setPlayerActionModal(null);
       setPlayerActionPassword('');
       setPlayerActionError(null);
     } catch (e) {
-      const message = `${playerActionModal.mode === 'edit' ? '编辑选手档案' : '删除选手档案'}失败：${getErrorMessage(e)}`;
+      const message = `${playerActionModal.mode === 'edit' ? '编辑失败' : '删除失败'}：${getErrorMessage(e)}`;
       setPlayerActionError(message);
       setPlayerError(message);
     } finally {
@@ -459,7 +471,7 @@ export default function DataSources() {
       const text = await file.text();
       const imported = normalizeImportedPlayers(JSON.parse(text));
       if (imported.length === 0) {
-        throw new Error('未识别到可导入的选手档案，请使用已适配的 JSON 格式。');
+        throw new Error('没有识别到可导入的选手资料，请检查文件内容。');
       }
 
       const savedProfiles: PlayerProfile[] = [];
@@ -475,9 +487,9 @@ export default function DataSources() {
         });
       }
 
-      setPlayerMessage(`已导入 ${savedProfiles.length} 条选手档案。`);
+      setPlayerMessage(`已导入 ${savedProfiles.length} 条资料。`);
     } catch (err) {
-      setPlayerError(err instanceof Error ? err.message : '选手档案导入失败，请检查文件格式。');
+      setPlayerError(err instanceof Error ? err.message : '导入失败，请检查文件。');
     } finally {
       event.target.value = '';
     }
@@ -496,13 +508,13 @@ export default function DataSources() {
     }`;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-20 pt-4 sm:pt-6">
-      <div className="rounded-[28px] border border-orange-100 bg-white/80 p-5 shadow-sm backdrop-blur-sm sm:p-7">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 pb-16 pt-4 sm:pt-6">
+      <div className="rounded-[28px] border border-orange-100 bg-white/80 p-5 shadow-sm backdrop-blur-sm sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h1 className="text-2xl font-extrabold text-brand-brown sm:text-3xl">数据源维护</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-brand-gray sm:text-base">
-              维护已接入的数据源地址，并支持导入当前已适配的 JSON 配置文件，便于后续扩展更多赛事平台与球类来源。
+              在这里维护数据源地址、选手档案和导入文件。
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:flex sm:items-center">
@@ -549,7 +561,7 @@ export default function DataSources() {
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">手动新增地址</h2>
-              <p className="text-sm text-brand-gray">先选接入类型，再填写地址和适配格式。建议同一个赛事源仅保留一条启用配置。</p>
+              <p className="text-sm text-brand-gray">先选类型，再填写地址和格式；同一赛事建议保留一条主配置。</p>
             </div>
           </div>
 
@@ -589,15 +601,15 @@ export default function DataSources() {
 
           <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
             <label className="block flex-1">
-              <span className="mb-2 block text-sm font-bold text-brand-brown">适配格式</span>
+              <span className="mb-2 block text-sm font-bold text-brand-brown">数据格式</span>
               <select
                 value={format}
                 onChange={(e) => setFormat(e.target.value as SourceItem['format'])}
                 className="w-full rounded-2xl border border-orange-100 bg-white px-4 py-3 text-sm text-brand-brown outline-none transition focus:border-orange-300"
               >
-                <option value="matchlife-source-json">MatchLife Source JSON</option>
-                <option value="ymq-json">YMQ JSON</option>
-                <option value="tennis-json">Tennis JSON</option>
+                <option value="matchlife-source-json">通用格式</option>
+                <option value="ymq-json">YMQ 赛事</option>
+                <option value="tennis-json">网球赛事</option>
               </select>
             </label>
             <button
@@ -606,7 +618,7 @@ export default function DataSources() {
               className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-5 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg"
             >
               <Plus className="h-4 w-4" />
-              {sourceSaved ? '已保存' : '保存数据源'}
+              {sourceSaved ? '已保存' : '保存地址'}
             </button>
           </div>
 
@@ -621,25 +633,25 @@ export default function DataSources() {
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">上传导入</h2>
-              <p className="text-sm text-brand-gray">当前仅支持已适配的 JSON 配置文件导入。</p>
+              <p className="text-sm text-brand-gray">支持导入已整理好的配置文件。</p>
             </div>
           </div>
 
           <div className="rounded-[28px] border border-dashed border-orange-200 bg-orange-50/40 px-6 py-10 text-center transition hover:border-orange-300 hover:bg-orange-50">
             <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={importFile} />
             <FileJson className="mb-4 h-8 w-8 text-orange-500" />
-            <div className="text-sm font-bold text-brand-brown">导入已适配的 JSON 配置</div>
+            <div className="text-sm font-bold text-brand-brown">导入配置文件</div>
             <div className="mt-2 text-xs leading-6 text-brand-gray">
-              支持数组或 <code className="rounded bg-white px-1.5 py-0.5">sources</code> 字段，单条记录需包含名称与地址。
+              支持数组或 <code className="rounded bg-white px-1.5 py-0.5">sources</code> 字段，每条至少包含名称和地址。
             </div>
             <button
               type="button"
-              title="上传已适配的数据源 JSON 配置"
+              title="上传数据源配置文件"
               onClick={() => fileInputRef.current?.click()}
               className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-full border border-orange-200 bg-white px-5 text-sm font-bold text-orange-600 transition hover:bg-orange-50 hover:shadow-sm"
             >
               <Upload className="h-4 w-4" />
-              选择配置文件
+              选择文件
             </button>
           </div>
 
@@ -651,7 +663,7 @@ export default function DataSources() {
             <div className="flex flex-wrap gap-2">
               {['ymq-json', 'matchlife-source-json', 'tennis-json'].map((tag) => (
                 <span key={tag} className="rounded-full border border-orange-100 bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">
-                  {tag}
+                  {getFormatLabel(tag as SourceItem['format'])}
                 </span>
               ))}
             </div>
@@ -664,21 +676,21 @@ export default function DataSources() {
           <div className="rounded-3xl border border-orange-100 bg-orange-50/60 p-4">
             <div className="text-sm font-extrabold text-brand-brown">接口地址</div>
             <p className="mt-2 text-sm leading-6 text-brand-gray">
-              适合已整理好的结构化接口，系统直接读取标准 JSON，适用于持续同步和批量更新。
+              适合稳定的标准 JSON 地址。
             </p>
             <div className="mt-3 rounded-2xl bg-white px-3 py-2 text-xs text-brand-brown">示例：`https://api.example.com/matchlife/source.json`</div>
           </div>
           <div className="rounded-3xl border border-orange-100 bg-white p-4">
             <div className="text-sm font-extrabold text-brand-brown">页面地址</div>
             <p className="mt-2 text-sm leading-6 text-brand-gray">
-              适合公开赛事页或成绩页，系统按已适配平台规则解析页面内容并提取比赛数据。
+              适合公开赛事页或成绩页。
             </p>
             <div className="mt-3 rounded-2xl bg-orange-50 px-3 py-2 text-xs text-brand-brown">示例：`https://apply.ymq.me/wechat/#/match?game_id=38653`</div>
           </div>
           <div className="rounded-3xl border border-orange-100 bg-white p-4">
             <div className="text-sm font-extrabold text-brand-brown">文件导入</div>
             <p className="mt-2 text-sm leading-6 text-brand-gray">
-              适合离线整理后的标准 JSON 配置或批量档案导入。导入前需先确认字段已适配。
+              适合批量导入已整理好的 JSON 文件。
             </p>
             <div className="mt-3 rounded-2xl bg-orange-50 px-3 py-2 text-xs text-brand-brown">示例：`matchlife-sources.json` / `players.json`</div>
           </div>
@@ -690,14 +702,14 @@ export default function DataSources() {
           </div>
           <div>
             <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">已维护数据源</h2>
-            <p className="text-sm text-brand-gray">同类配置集中在此管理，启停、删除与地址核对都在一个区域完成。</p>
+              <p className="text-sm text-brand-gray">启停、删除和地址核对都在这里完成。</p>
           </div>
         </div>
 
         <div className="grid gap-4">
           {loading && (
             <div className="rounded-2xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-sm text-orange-700">
-              正在加载数据库中的数据源配置...
+              正在加载已保存的数据源...
             </div>
           )}
           {sources.map((item) => (
@@ -708,21 +720,21 @@ export default function DataSources() {
                   <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${item.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                     {item.enabled ? '启用中' : '已停用'}
                   </span>
-                  <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700">{item.type}</span>
-                  <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700">{item.format}</span>
+                  <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700">{getSourceTypeLabel(item.type)}</span>
+                  <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-bold text-orange-700">{getFormatLabel(item.format)}</span>
                 </div>
                 <div className="mt-2 flex items-start gap-2 text-sm text-brand-gray">
                   <Link2 className="h-4 w-4 flex-shrink-0 text-orange-400" />
                   <span className="break-all whitespace-normal leading-5">{item.url}</span>
                 </div>
                 <div className="mt-2 text-xs text-brand-gray">
-                  来源：{item.origin === 'manual' ? '手动维护' : '文件导入'} · 最近更新：{new Date(item.updatedAt).toLocaleString()}
+                  添加方式：{item.origin === 'manual' ? '手动添加' : '文件导入'} · 最近更新：{new Date(item.updatedAt).toLocaleString()}
                 </div>
               </div>
               <div className="flex items-center gap-2 self-end sm:self-auto">
                 <button
                   type="button"
-                  title={item.enabled ? '停用数据源' : '启用数据源'}
+                  title={item.enabled ? '暂停使用' : '恢复使用'}
                   onClick={() => toggleSource(item.id)}
                   className={`inline-flex h-11 w-11 items-center justify-center rounded-full border transition ${item.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'border-orange-200 bg-white text-orange-500 hover:bg-orange-50'}`}
                 >
@@ -730,7 +742,7 @@ export default function DataSources() {
                 </button>
                 <button
                   type="button"
-                  title="移除数据源"
+                  title="删除地址"
                   onClick={() => removeSource(item.id)}
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-red-100 bg-white text-red-500 transition hover:bg-red-50"
                 >
@@ -753,7 +765,7 @@ export default function DataSources() {
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">维护选手档案</h2>
-              <p className="text-sm text-brand-gray">为前台生涯页补充头像、俱乐部、教练与基础资料。</p>
+              <p className="text-sm text-brand-gray">补充头像、俱乐部、教练等资料。</p>
             </div>
           </div>
 
@@ -844,7 +856,7 @@ export default function DataSources() {
               className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-5 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg"
             >
               <Plus className="h-4 w-4" />
-              {playerSaved ? '已保存' : editingPlayerId ? '更新选手档案' : '保存选手档案'}
+              {playerSaved ? '已保存' : editingPlayerId ? '保存修改' : '保存资料'}
             </button>
             {editingPlayerId && (
               <button
@@ -863,7 +875,7 @@ export default function DataSources() {
                 }}
                 className="inline-flex h-12 items-center justify-center rounded-full border border-orange-200 bg-white px-5 text-sm font-bold text-orange-700 transition hover:bg-orange-50"
               >
-                取消编辑
+                取消修改
               </button>
             )}
             <div className="rounded-2xl border border-orange-100 bg-orange-50/60 px-4 py-3 text-sm text-brand-gray">
@@ -881,15 +893,15 @@ export default function DataSources() {
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">导入选手档案</h2>
-              <p className="text-sm text-brand-gray">支持导入已适配的 JSON 档案文件，快速补齐选手基础信息。</p>
+              <p className="text-sm text-brand-gray">支持批量导入选手基础信息。</p>
             </div>
           </div>
           <div className="rounded-[28px] border border-dashed border-orange-200 bg-orange-50/40 px-6 py-10 text-center transition hover:border-orange-300 hover:bg-orange-50">
             <input ref={playerFileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={importPlayerProfiles} />
             <FileJson className="mb-4 h-8 w-8 text-orange-500" />
-            <div className="text-sm font-bold text-brand-brown">导入已适配的选手档案 JSON</div>
+            <div className="text-sm font-bold text-brand-brown">导入选手资料文件</div>
             <div className="mt-2 text-xs leading-6 text-brand-gray">
-              支持数组或 <code className="rounded bg-white px-1.5 py-0.5">players</code> 字段，单条记录至少包含姓名与主运动类型。
+              支持数组或 <code className="rounded bg-white px-1.5 py-0.5">players</code> 字段，每条至少包含姓名和主运动类型。
             </div>
             <button
               type="button"
@@ -897,7 +909,7 @@ export default function DataSources() {
               className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-full border border-orange-200 bg-white px-5 text-sm font-bold text-orange-600 transition hover:bg-orange-50 hover:shadow-sm"
             >
               <Upload className="h-4 w-4" />
-              选择档案文件
+              选择文件
             </button>
           </div>
           <div className="mt-5 rounded-3xl border border-orange-100 bg-white p-4">
@@ -919,7 +931,7 @@ export default function DataSources() {
             <div className="space-y-3 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
               {playerProfiles.length === 0 ? (
                 <div className="rounded-2xl bg-orange-50/60 px-4 py-4 text-sm text-brand-gray">
-                  暂无选手档案，可先手动新增或导入 JSON。
+                  暂时还没有选手资料，可先手动添加或导入文件。
                 </div>
               ) : (
                 filteredProfiles
@@ -961,7 +973,7 @@ export default function DataSources() {
                 ))
               )}
               {playerSearch && filteredProfiles.length === 0 && (
-                <div className="text-center py-4 text-xs text-brand-gray">未搜索到相关选手</div>
+                <div className="text-center py-4 text-xs text-brand-gray">暂未找到相关选手</div>
               )}
             </div>
           </div>
@@ -976,32 +988,32 @@ export default function DataSources() {
             <FileJson className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">已适配格式说明与示例</h2>
-            <p className="text-sm text-brand-gray">集中查看已适配格式、字段要求和 JSON 示例，避免不同来源配置混用。</p>
+            <h2 className="text-lg font-extrabold text-brand-brown sm:text-xl">格式说明与示例</h2>
+            <p className="text-sm text-brand-gray">这里汇总常用格式和示例，方便快速核对内容是否可用。</p>
           </div>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-3">
           <div className="rounded-3xl border border-orange-100 bg-orange-50/50 p-4">
-            <div className="mb-2 text-sm font-extrabold text-brand-brown">MatchLife Source JSON</div>
+            <div className="mb-2 text-sm font-extrabold text-brand-brown">通用格式</div>
             <p className="text-sm leading-6 text-brand-gray">
-              用于系统通用数据源配置，至少包含 `name`、`type`、`url`、`format`、`enabled` 字段。
+              适合常规数据源，通常需要名称、类型、地址、格式和启用状态。
             </p>
             <pre className="mt-4 overflow-x-auto rounded-2xl bg-white p-4 text-xs leading-6 text-brand-brown">{MATCHLIFE_SOURCE_JSON_EXAMPLE}</pre>
           </div>
 
           <div className="rounded-3xl border border-orange-100 bg-white p-4">
-            <div className="mb-2 text-sm font-extrabold text-brand-brown">YMQ JSON</div>
+            <div className="mb-2 text-sm font-extrabold text-brand-brown">YMQ 赛事</div>
             <p className="text-sm leading-6 text-brand-gray">
-              用于已适配的 YMQ 赛事页面地址配置，通常把 `type` 设为 `html`，并将 `format` 设为 `ymq-json`。
+              适合 YMQ 赛事页面，一般使用页面地址并选择 YMQ 赛事格式。
             </p>
             <pre className="mt-4 overflow-x-auto rounded-2xl bg-orange-50 p-4 text-xs leading-6 text-brand-brown">{YMQ_JSON_EXAMPLE}</pre>
           </div>
 
           <div className="rounded-3xl border border-orange-100 bg-white p-4">
-            <div className="mb-2 text-sm font-extrabold text-brand-brown">Tennis JSON</div>
+            <div className="mb-2 text-sm font-extrabold text-brand-brown">网球赛事</div>
             <p className="text-sm leading-6 text-brand-gray">
-              用于已适配的网球赛事 JSON 数据源，通常由接口直接返回标准结构，`format` 设为 `tennis-json`。
+              适合网球赛事数据，一般直接使用接口地址并选择网球赛事格式。
             </p>
             <pre className="mt-4 overflow-x-auto rounded-2xl bg-orange-50 p-4 text-xs leading-6 text-brand-brown">{TENNIS_JSON_EXAMPLE}</pre>
           </div>
@@ -1009,9 +1021,9 @@ export default function DataSources() {
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-3xl border border-orange-100 bg-white p-4">
-            <div className="mb-2 text-sm font-extrabold text-brand-brown">选手档案 JSON</div>
+            <div className="mb-2 text-sm font-extrabold text-brand-brown">选手资料文件</div>
             <p className="text-sm leading-6 text-brand-gray">
-              用于批量导入选手基础资料，建议至少提供姓名、主运动类型，其余字段可按需补充。
+              适合批量导入选手资料，建议至少提供姓名和主运动类型，其余内容按需补充。
             </p>
             <pre className="mt-4 overflow-x-auto rounded-2xl bg-orange-50 p-4 text-xs leading-6 text-brand-brown">{PLAYER_PROFILE_JSON_EXAMPLE}</pre>
           </div>
@@ -1020,9 +1032,9 @@ export default function DataSources() {
             <div className="text-sm font-extrabold text-brand-brown">维护建议</div>
             <ul className="mt-3 space-y-2 text-sm leading-6 text-brand-gray">
               <li>1. 同一赛事优先保留一个启用中的主数据源。</li>
-              <li>2. 页面地址适合抓公开页，接口地址适合稳定 JSON 源。</li>
+              <li>2. 页面地址适合公开赛事页，接口地址适合稳定数据地址。</li>
               <li>3. 选手档案删除前请先确认前台是否仍依赖该档案展示。</li>
-              <li>4. 临时密码仅用于当前阶段，后续将切换 SSO 权限控制。</li>
+              <li>4. 当前使用访问密码确认操作，后续会进一步统一权限方式。</li>
             </ul>
           </div>
         </div>
@@ -1033,15 +1045,15 @@ export default function DataSources() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-brown/35 px-4">
           <div className="w-full max-w-md rounded-[28px] border border-orange-100 bg-white p-6 shadow-xl">
             <h3 className="text-xl font-extrabold text-brand-brown">
-              {playerActionModal.mode === 'edit' ? '确认编辑选手档案' : '确认删除选手档案'}
+              {playerActionModal.mode === 'edit' ? '确认修改资料' : '确认删除资料'}
             </h3>
             <p className="mt-3 text-sm leading-6 text-brand-gray">
               {playerActionModal.mode === 'edit'
-                ? `即将编辑选手“${playerActionModal.profile.player_name}”，请输入数据源密码后继续。`
-                : `即将删除选手“${playerActionModal.profile.player_name}”。该操作会影响前台档案展示，请输入数据源密码确认。`}
+                ? `即将修改“${playerActionModal.profile.player_name}”，请输入访问密码继续。`
+                : `即将删除“${playerActionModal.profile.player_name}”，请输入访问密码确认。`}
             </p>
             <label className="mt-5 block">
-              <span className="mb-2 block text-sm font-bold text-brand-brown">数据源密码</span>
+              <span className="mb-2 block text-sm font-bold text-brand-brown">访问密码</span>
               <input
                 type="password"
                 value={playerActionPassword}
@@ -1055,7 +1067,7 @@ export default function DataSources() {
                     void confirmPlayerAction();
                   }
                 }}
-                placeholder="请输入数据源密码"
+                placeholder="请输入访问密码"
                 className={`w-full rounded-2xl bg-white px-4 py-3 text-sm text-brand-brown outline-none transition ${
                   playerActionError
                     ? 'border border-red-300 focus:border-red-400'
@@ -1086,7 +1098,7 @@ export default function DataSources() {
                     : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400'
                 } disabled:cursor-not-allowed disabled:opacity-60`}
               >
-                {playerActionPending ? '处理中...' : playerActionModal.mode === 'edit' ? '确认编辑' : '确认删除'}
+                {playerActionPending ? '处理中...' : playerActionModal.mode === 'edit' ? '确认修改' : '确认删除'}
               </button>
             </div>
           </div>

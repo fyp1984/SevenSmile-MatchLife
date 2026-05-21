@@ -224,11 +224,11 @@ export default function Leaderboard() {
   };
 
   return (
-    <div className="flex flex-col items-center pt-6 pb-20 w-full max-w-5xl mx-auto">
-      <div className="w-full mb-8">
+    <div className="mx-auto flex w-full max-w-5xl flex-col items-center pt-6 pb-16">
+      <div className="mb-6 w-full">
         <h1 className="mb-2 text-2xl font-extrabold text-brand-brown sm:text-3xl">选手排行榜</h1>
         <p className="text-sm text-brand-gray sm:text-base">
-          请选择运动项目、性别与单打/双打条件后，再手动检索排行榜，以降低初始化数据库负载。
+          选好项目和条件后，再查看对应排行榜。
         </p>
       </div>
 
@@ -300,12 +300,12 @@ export default function Leaderboard() {
       <div className="mb-6 flex w-full flex-col gap-3 rounded-3xl border border-orange-100 bg-white/80 p-5 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-brand-gray">
           {governanceChecking
-            ? '正在准备当前排行榜...'
+            ? '正在准备排行榜...'
             : shouldPauseRankings
-              ? '当前筛选范围的数据仍在更新，排行榜稍后开放。'
+              ? '当前结果还在整理中，请稍后再看。'
               : hasSearched && !filtersDirty
-                ? '当前结果已与所选筛选条件同步。'
-                : '调整筛选条件后，点击“开始检索”再加载排行榜。'}
+                ? '当前结果已按所选条件展示。'
+                : '调整条件后，点击按钮查看排行榜。'}
         </div>
         <button
           type="button"
@@ -313,7 +313,7 @@ export default function Leaderboard() {
           disabled={governanceChecking || hasBlockingRankings}
           className="inline-flex h-11 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-6 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400"
         >
-          {governanceChecking ? '准备中...' : hasBlockingRankings ? '稍后查看' : hasSearched ? '更新排行榜' : '开始检索'}
+          {governanceChecking ? '准备中...' : hasBlockingRankings ? '稍后查看' : hasSearched ? '更新排行榜' : '查看排行榜'}
         </button>
       </div>
 
@@ -328,7 +328,7 @@ export default function Leaderboard() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
             <div>
-              <div className="font-bold text-amber-900">排行榜已暂停</div>
+              <div className="font-bold text-amber-900">排行榜暂不可查看</div>
               <div className="mt-1 leading-6">{governancePauseNotice}</div>
               {governanceScopeSummary && (
                 <div className="mt-2 leading-6">影响范围：{governanceScopeSummary}</div>
@@ -344,14 +344,14 @@ export default function Leaderboard() {
       {!shouldPauseRankings && !hasSearched ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Trophy className="mx-auto mb-4 h-16 w-16 text-orange-200" />
-          <h3 className="mb-2 text-xl font-bold text-brand-brown">尚未开始检索</h3>
-          <p className="text-sm text-brand-gray">请先选择筛选条件，再点击“开始检索”加载排行榜。</p>
+          <h3 className="mb-2 text-xl font-bold text-brand-brown">还没开始查看</h3>
+          <p className="text-sm text-brand-gray">先选条件，再点击“查看排行榜”。</p>
         </div>
       ) : !shouldPauseRankings && loading && rankings.length === 0 ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
           <Activity className="w-12 h-12 text-orange-400 mx-auto mb-4 animate-pulse" />
-          <h3 className="text-xl font-bold text-brand-brown mb-2">正在获取数据...</h3>
-          <p className="text-brand-gray text-sm">稍等片刻，排行榜正在路上</p>
+          <h3 className="text-xl font-bold text-brand-brown mb-2">正在加载排行榜...</h3>
+          <p className="text-brand-gray text-sm">稍等片刻</p>
         </div>
       ) : !shouldPauseRankings && rankings.length === 0 ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-12 text-center">
@@ -380,7 +380,7 @@ export default function Leaderboard() {
                   <th className="p-4 font-bold text-center">胜场</th>
                   <th className="p-4 font-bold text-center">总场次</th>
                   <th className="p-4 font-bold text-center">胜率</th>
-                  <th className="p-4 font-bold text-center">最近活跃</th>
+                  <th className="p-4 font-bold text-center">最近比赛</th>
                 </tr>
               </thead>
               <tbody>
@@ -432,7 +432,7 @@ export default function Leaderboard() {
                             <span className="font-bold text-brand-brown group-hover/link:text-orange-600 transition-colors">
                               {player.player_name}
                             </span>
-                            <p className="text-xs text-brand-gray">查看生涯趋势与比赛时间轴</p>
+                            <p className="text-xs text-brand-gray">查看详情</p>
                           </div>
                         </Link>
                       </td>

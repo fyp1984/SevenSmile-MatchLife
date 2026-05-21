@@ -1,4 +1,12 @@
-import crypto from 'node:crypto';
+import {
+  ACCESS_COOKIE,
+  ACCESS_SESSION_COOKIE,
+  ACCESS_VERSION,
+  ACCESS_VERSION_COOKIE,
+  issueFollowSession,
+  parseAccessSessionCookie,
+  setAccessCookie,
+} from './_access';
 
 type VercelReq = {
   method?: string;
@@ -11,21 +19,8 @@ type VercelRes = {
   end: (body?: string) => void;
 };
 
-const ACCESS_COOKIE = 'matchlife_wechat_ok';
-const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
-const ACCESS_SESSION_COOKIE = 'matchlife_wechat_session';
-const ACCESS_COOKIE_TTL = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
-const ACCESS_VERSION =
-  `${process.env.WECHAT_ACCESS_VERSION || process.env.VITE_WECHAT_ACCESS_VERSION || ''}`.trim() ||
-  new Date().toISOString().slice(0, 10);
-const SESSION_FORCE_CHECK_GRACE_MS = Number(process.env.WECHAT_SESSION_FORCE_CHECK_GRACE_MS || 60 * 1000);
 const APPID = `${process.env.WECHAT_MP_APPID || ''}`.trim();
 const SECRET = `${process.env.WECHAT_MP_SECRET || ''}`.trim();
-const SIGNING_SECRET =
-  process.env.WECHAT_ACCESS_LINK_SECRET ||
-  process.env.WECHAT_MP_SECRET ||
-  process.env.WECHAT_ACCESS_CODES ||
-  'matchlife-dev-secret';
 
 let mpTokenCache: { token: string; expireAt: number } | null = null;
 
@@ -34,26 +29,10 @@ function firstHeader(v: unknown) {
   return typeof v === 'string' ? v : '';
 }
 
-function getAppBasePath() {
-  const v = (process.env.APP_BASE_PATH || '/').trim();
-  if (!v || v === '/') return '';
-  return `/${v.replace(/^\/+|\/+$/g, '')}`;
-}
-
 function sendJson(res: VercelRes, statusCode: number, body: unknown) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
-}
-
-function signValue(value: string) {
-  return crypto.createHmac('sha256', SIGNING_SECRET).update(value).digest('hex');
-}
-
-function base64urlDecode(input: string) {
-  const pad = input.length % 4 ? '='.repeat(4 - (input.length % 4)) : '';
-  const b64 = (input + pad).replace(/-/g, '+').replace(/_/g, '/');
-  return Buffer.from(b64, 'base64').toString('utf8');
 }
 
 function parseCookies(req: VercelReq) {
@@ -69,44 +48,6 @@ function parseCookies(req: VercelReq) {
       result[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
     });
   return result;
-}
-
-function setAccessCookie(res: VercelRes, enabled: boolean, openid = '') {
-  const maxAge = enabled ? ACCESS_COOKIE_TTL : 0;
-  const value = enabled ? '1' : '';
-  const version = enabled ? ACCESS_VERSION : '';
-  const session = enabled && openid ? issueAccessSessionCookie(openid) : '';
-  const path = getAppBasePath() || '/';
-  res.setHeader('Set-Cookie', [
-    `${ACCESS_COOKIE}=${value}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_VERSION_COOKIE}=${version}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_SESSION_COOKIE}=${session}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-  ]);
-}
-
-function issueAccessSessionCookie(openid: string) {
-  const payload = {
-    o: openid,
-    v: ACCESS_VERSION,
-    i: Date.now(),
-    e: Date.now() + ACCESS_COOKIE_TTL * 1000,
-  };
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-  return `${encoded}.${signValue(encoded)}`;
-}
-
-function parseAccessSessionCookie(value: string) {
-  if (!value || !value.includes('.')) throw new Error('invalid session cookie');
-  const [encoded, sig] = value.split('.', 2);
-  if (signValue(encoded) !== sig) throw new Error('bad session signature');
-  const payload = JSON.parse(base64urlDecode(encoded));
-  if (!payload?.o || !payload?.e) throw new Error('bad session payload');
-  if (Number(payload.e) < Date.now()) throw new Error('expired session');
-  return payload as { o: string; v?: string; e: number };
 }
 
 async function getMpAccessToken() {
@@ -170,9 +111,17 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return;
     }
 
-    const session = parseAccessSessionCookie(cookies[ACCESS_SESSION_COOKIE] || '');
+    const rawSession = cookies[ACCESS_SESSION_COOKIE] || '';
+    const session = parseAccessSessionCookie(rawSession, true);
     if (session.v && session.v !== ACCESS_VERSION) throw new Error('session version mismatch');
-    const issuedAt = Number((session as { i?: number }).i || 0);
+
+    if (Number(session.e) < Date.now()) {
+      setAccessCookie(res, false);
+      sendJson(res, 401, { ok: false, error: '会话已过期，请重新验证' });
+      return;
+    }
+
+    if (!session.o) throw new Error('missing openid');
     const subscribed = await checkFollowStatus(session.o);
     if (!subscribed) {
       setAccessCookie(res, false);
@@ -180,8 +129,14 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return;
     }
 
-    setAccessCookie(res, true, session.o);
-    sendJson(res, 200, { ok: true, version: ACCESS_VERSION });
+    const renewedSession = issueFollowSession(session.o);
+    setAccessCookie(res, true, renewedSession);
+    sendJson(res, 200, {
+      ok: true,
+      version: ACCESS_VERSION,
+      accessType: 'follow',
+      expiresAt: renewedSession.e,
+    });
   } catch {
     setAccessCookie(res, false);
     sendJson(res, 401, { ok: false, error: '会话校验失败，请重新验证' });

@@ -13,12 +13,14 @@ import {
 } from '../lib/wechatAccess';
 import Layout from './Layout';
 
+const PUBLIC_ROUTES = new Set(['/', '/guide', '/gate', '/gate/wechat', '/follow', '/wechat/complete']);
+
 export default function WechatProtectedLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [guardState, setGuardState] = useState<'checking' | 'allowed' | 'oauth' | 'gate' | 'follow'>('checking');
-  const isWechatWhitelistRoute = useMemo(
-    () => location.pathname === '/gate' || isWechatIntermediateRoute(location.pathname),
+  const isPublicRoute = useMemo(
+    () => PUBLIC_ROUTES.has(location.pathname) || isWechatIntermediateRoute(location.pathname),
     [location.pathname]
   );
 
@@ -31,7 +33,7 @@ export default function WechatProtectedLayout() {
     let cancelled = false;
 
     async function verify() {
-      if (isWechatWhitelistRoute) {
+      if (isPublicRoute) {
         setGuardState('allowed');
         return;
       }
@@ -56,7 +58,9 @@ export default function WechatProtectedLayout() {
         const data = (await resp.json().catch(() => ({}))) as {
           ok?: boolean;
           version?: string;
+          expiresAt?: number;
           redirectToFollow?: boolean;
+          redirectToGate?: boolean;
         };
         if (cancelled) return;
         if (resp.ok && data?.ok) {
@@ -68,7 +72,11 @@ export default function WechatProtectedLayout() {
           return;
         }
         clearWechatAccess();
-        setGuardState(data?.redirectToFollow ? 'follow' : isWechatUA() ? 'oauth' : 'gate');
+        if (data?.redirectToFollow) {
+          setGuardState('follow');
+          return;
+        }
+        setGuardState(isWechatUA() && !data?.redirectToGate ? 'oauth' : 'gate');
       } catch {
         if (cancelled) return;
         clearWechatAccess();
@@ -81,10 +89,10 @@ export default function WechatProtectedLayout() {
     return () => {
       cancelled = true;
     };
-  }, [isWechatWhitelistRoute, location.pathname, next]);
+  }, [isPublicRoute, location.pathname, next]);
 
   useEffect(() => {
-    if (isWechatWhitelistRoute) return;
+    if (isPublicRoute) return;
     if (guardState === 'allowed' || guardState === 'checking') return;
     if (guardState === 'oauth') {
       window.location.href = buildWechatOauthStartUrl(import.meta.env.BASE_URL, next);
@@ -95,7 +103,7 @@ export default function WechatProtectedLayout() {
       return;
     }
     navigate(`/gate/wechat?next=${encodeURIComponent(next)}`, { replace: true });
-  }, [guardState, isWechatWhitelistRoute, navigate, next]);
+  }, [guardState, isPublicRoute, navigate, next]);
 
   if (guardState !== 'allowed') {
     return <div className="p-20 text-center text-orange-500 font-bold">正在校验公众号访问权限...</div>;

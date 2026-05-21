@@ -1,4 +1,10 @@
 import crypto from 'node:crypto';
+import {
+  ACCESS_VERSION,
+  issueFollowSession,
+  setAccessCookie,
+  signValue,
+} from './_access';
 
 type VercelReq = {
   method?: string;
@@ -12,20 +18,8 @@ type VercelRes = {
   end: (body?: string) => void;
 };
 
-const ACCESS_COOKIE = 'matchlife_wechat_ok';
-const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
-const ACCESS_SESSION_COOKIE = 'matchlife_wechat_session';
-const ACCESS_COOKIE_TTL = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
-const ACCESS_VERSION =
-  `${process.env.WECHAT_ACCESS_VERSION || process.env.VITE_WECHAT_ACCESS_VERSION || ''}`.trim() ||
-  new Date().toISOString().slice(0, 10);
 const APPID = `${process.env.WECHAT_MP_APPID || ''}`.trim();
 const SECRET = `${process.env.WECHAT_MP_SECRET || ''}`.trim();
-const SIGNING_SECRET =
-  process.env.WECHAT_ACCESS_LINK_SECRET ||
-  process.env.WECHAT_MP_SECRET ||
-  process.env.WECHAT_ACCESS_CODES ||
-  'matchlife-dev-secret';
 const STRICT_FOLLOW_CHECK = process.env.WECHAT_STRICT_FOLLOW_CHECK === 'true';
 
 let mpTokenCache: { token: string; expireAt: number } | null = null;
@@ -43,12 +37,6 @@ function getOrigin(req: VercelReq) {
   return `${proto}://${host}`;
 }
 
-function getAppBasePath() {
-  const v = (process.env.APP_BASE_PATH || '/').trim();
-  if (!v || v === '/') return '';
-  return `/${v.replace(/^\/+|\/+$/g, '')}`;
-}
-
 function safeNext(next: string | null | undefined) {
   const v = String(next || '/').trim();
   return v.startsWith('/') ? v : '/';
@@ -60,42 +48,10 @@ function sendJson(res: VercelRes, statusCode: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function issueAccessSessionCookie(openid: string) {
-  if (!openid) return '';
-  const payload = {
-    o: openid,
-    v: ACCESS_VERSION,
-    e: Date.now() + ACCESS_COOKIE_TTL * 1000,
-  };
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-  return `${encoded}.${signValue(encoded)}`;
-}
-
-function setAccessCookie(res: VercelRes, enabled: boolean, openid = '') {
-  const maxAge = enabled ? ACCESS_COOKIE_TTL : 0;
-  const value = enabled ? '1' : '';
-  const version = enabled ? ACCESS_VERSION : '';
-  const session = enabled ? issueAccessSessionCookie(openid) : '';
-  const path = getAppBasePath() || '/';
-  res.setHeader('Set-Cookie', [
-    `${ACCESS_COOKIE}=${value}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_VERSION_COOKIE}=${version}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-    `${ACCESS_SESSION_COOKIE}=${session}; Max-Age=${maxAge}; Path=${path}; SameSite=Lax; Secure`,
-  ] as unknown as string);
-}
-
 function base64urlDecode(input: string) {
   const pad = input.length % 4 ? '='.repeat(4 - (input.length % 4)) : '';
   const b64 = (input + pad).replace(/-/g, '+').replace(/_/g, '/');
   return Buffer.from(b64, 'base64').toString('utf8');
-}
-
-function signValue(value: string) {
-  return crypto.createHmac('sha256', SIGNING_SECRET).update(value).digest('hex');
 }
 
 function cleanupMaps() {
@@ -155,10 +111,11 @@ async function queryFollowStatus(openid: string, accessToken: string) {
   return Number(j?.subscribe || 0) === 1;
 }
 
-async function checkFollowStatus(openid: string) {
+async function checkFollowStatus(openid: string, options?: { force?: boolean }) {
   cleanupMaps();
+  const force = options?.force === true;
   const cached = followCache.get(openid);
-  if (cached && cached.checkedAt + 5 * 60 * 1000 > Date.now()) return cached.subscribed;
+  if (!force && cached && cached.checkedAt + 5 * 60 * 1000 > Date.now()) return cached.subscribed;
   const token = await getMpAccessToken();
   if (!token) throw new Error('missing mp secret');
   let subscribed: boolean;
@@ -186,7 +143,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     const payload = parseTicket(String(url.searchParams.get('ticket') || ''));
     let subscribed = true;
     try {
-      subscribed = await checkFollowStatus(payload.o);
+      subscribed = await checkFollowStatus(payload.o, { force: true });
     } catch {
       if (STRICT_FOLLOW_CHECK) throw new Error('follow check failed');
     }
@@ -196,7 +153,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return;
     }
     usedTickets.set(payload.n, Number(payload.e));
-    setAccessCookie(res, true, payload.o);
+    setAccessCookie(res, true, issueFollowSession(payload.o));
     sendJson(res, 200, { ok: true, next: safeNext(payload.p), version: ACCESS_VERSION });
   } catch {
     setAccessCookie(res, false);

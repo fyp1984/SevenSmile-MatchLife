@@ -43,6 +43,11 @@ const CARD_WIDTH = 1200;
 const CARD_HEIGHT = 630;
 const DPR = 2;
 
+function getOfficialQrUrl() {
+  if (typeof window === 'undefined') return `${import.meta.env.BASE_URL}sevensmile-wechat-qrcode.jpg`;
+  return `${window.location.origin}${import.meta.env.BASE_URL}sevensmile-wechat-qrcode.jpg`;
+}
+
 function createDefaultGradientBackground(ctx: CanvasRenderingContext2D): void {
   const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
   gradient.addColorStop(0, '#FF9800');
@@ -202,9 +207,51 @@ function getTemplateColors(template: ShareCardTemplate = 'default') {
   }
 }
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`图片加载失败: ${src}`));
+    image.src = src;
+  });
+}
+
+function drawOfficialQrBlock(
+  ctx: CanvasRenderingContext2D,
+  qrImage: HTMLImageElement | null,
+  template: ShareCardTemplate = 'default'
+) {
+  if (!qrImage) return;
+
+  const colors = getTemplateColors(template);
+  const blockWidth = 210;
+  const blockHeight = 220;
+  const blockX = CARD_WIDTH - blockWidth - 80;
+  const blockY = CARD_HEIGHT - blockHeight - 70;
+
+  ctx.save();
+  drawRoundedRect(ctx, blockX, blockY, blockWidth, blockHeight, 28);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.98)';
+  ctx.fill();
+  ctx.restore();
+
+  ctx.drawImage(qrImage, blockX + 30, blockY + 22, 150, 150);
+
+  ctx.fillStyle = colors.textMain;
+  ctx.font = 'bold 20px "PingFang SC", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('扫码关注公众号', blockX + blockWidth / 2, blockY + 194);
+
+  ctx.fillStyle = colors.textSub;
+  ctx.font = '16px "PingFang SC", sans-serif';
+  ctx.fillText('七笑果-文体中心', blockX + blockWidth / 2, blockY + 214);
+}
+
 function drawMatchCard(
   ctx: CanvasRenderingContext2D,
-  data: MatchShareData
+  data: MatchShareData,
+  qrImage: HTMLImageElement | null
 ): void {
   const template = data.template || 'default';
   applyTemplateBackground(ctx, template);
@@ -262,11 +309,13 @@ function drawMatchCard(
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
+  drawOfficialQrBlock(ctx, qrImage, template);
 }
 
 function drawPlayerCard(
   ctx: CanvasRenderingContext2D,
-  data: PlayerShareData
+  data: PlayerShareData,
+  qrImage: HTMLImageElement | null
 ): void {
   const template = data.template || 'default';
   applyTemplateBackground(ctx, template);
@@ -316,11 +365,13 @@ function drawPlayerCard(
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
+  drawOfficialQrBlock(ctx, qrImage, template);
 }
 
 function drawStatsCard(
   ctx: CanvasRenderingContext2D,
-  data: StatsShareData
+  data: StatsShareData,
+  qrImage: HTMLImageElement | null
 ): void {
   const template = data.template || 'default';
   applyTemplateBackground(ctx, template);
@@ -371,6 +422,7 @@ function drawStatsCard(
   ctx.fillStyle = colors.textMain;
   ctx.font = 'bold 24px "PingFang SC", sans-serif';
   ctx.fillText('七笑果-赛事生涯', 80, CARD_HEIGHT - 60);
+  drawOfficialQrBlock(ctx, qrImage, template);
 }
 
 export async function generateShareCard(data: ShareCardData): Promise<string> {
@@ -386,27 +438,72 @@ export async function generateShareCard(data: ShareCardData): Promise<string> {
   }
 
   ctx.scale(DPR, DPR);
+  let officialQrImage: HTMLImageElement | null = null;
+  try {
+    officialQrImage = await loadImage(getOfficialQrUrl());
+  } catch {
+    officialQrImage = null;
+  }
 
   switch (data.type) {
     case 'match':
-      drawMatchCard(ctx, data);
+      drawMatchCard(ctx, data, officialQrImage);
       break;
     case 'player':
-      drawPlayerCard(ctx, data);
+      drawPlayerCard(ctx, data, officialQrImage);
       break;
     case 'stats':
-      drawStatsCard(ctx, data);
+      drawStatsCard(ctx, data, officialQrImage);
       break;
   }
 
   return canvas.toDataURL('image/png', 1.0);
 }
 
+export function dataUrlToBlob(dataUrl: string): Blob {
+  if (!dataUrl.startsWith('data:')) {
+    throw new Error('仅支持转换 base64 图片数据');
+  }
+
+  const [meta, payload] = dataUrl.split(',', 2);
+  if (!meta || !payload) {
+    throw new Error('分享图片数据无效，请重新生成');
+  }
+
+  const mimeMatch = meta.match(/data:(.*?);base64/i);
+  const mimeType = mimeMatch?.[1] || 'image/png';
+  const binary = window.atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return new Blob([bytes], { type: mimeType });
+}
+
+export function dataUrlToFile(dataUrl: string, filename: string): File {
+  const blob = dataUrlToBlob(dataUrl);
+  return new File([blob], filename, { type: blob.type || 'image/png' });
+}
+
 export function downloadImage(dataUrl: string, filename: string): void {
+  if (!dataUrl.startsWith('data:')) {
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = dataUrl;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  }
+
+  const blob = dataUrlToBlob(dataUrl);
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.download = filename;
-  link.href = dataUrl;
+  link.href = objectUrl;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }

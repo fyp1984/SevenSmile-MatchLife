@@ -684,14 +684,14 @@ export default function Stats() {
         : '可查看';
 
   if (loadingRecent) {
-    return <div className="p-20 text-center text-orange-500 font-bold">正在加载赛事列表...</div>;
+    return <div className="p-20 text-center text-orange-500 font-bold">正在准备赛事列表...</div>;
   }
 
   return (
-    <div className="flex flex-col items-center pt-6 pb-20 w-full max-w-5xl mx-auto">
-      <div className="w-full mb-8">
+    <div className="mx-auto flex w-full max-w-5xl flex-col items-center pt-6 pb-16">
+      <div className="mb-6 w-full">
         <h1 className="mb-2 text-2xl font-extrabold text-brand-brown sm:text-3xl">赛事概览看板</h1>
-        <p className="text-sm text-brand-gray sm:text-base">先选择目标赛事并手动点击“加载统计”，系统不会在页面加载时预先计算完整统计。</p>
+        <p className="text-sm text-brand-gray sm:text-base">先选赛事，再加载你要看的统计结果。</p>
       </div>
       {errorMsg && (
         <div className="w-full mb-6 bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-3xl text-sm font-medium">
@@ -703,7 +703,7 @@ export default function Stats() {
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
             <div>
-              <div className="font-bold text-amber-900">统计稍后开放</div>
+              <div className="font-bold text-amber-900">统计暂时不可查看</div>
               <div className="mt-1 leading-6">{governancePauseNotice}</div>
               {governanceScopeSummary && (
                 <div className="mt-2 leading-6">影响范围：{governanceScopeSummary}</div>
@@ -721,22 +721,22 @@ export default function Stats() {
           </div>
         </div>
       )}
-      <div className="w-full bg-white/70 backdrop-blur-sm rounded-3xl border border-orange-100 p-5 mb-8">
+      <div className="mb-6 w-full rounded-3xl border border-orange-100 bg-white/70 p-5 backdrop-blur-sm">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
           <div className="flex-1">
-            <div className="text-sm font-bold text-brand-brown mb-2">指定赛事名称后再统计</div>
+            <div className="mb-2 text-sm font-bold text-brand-brown">先选赛事，再查看数据</div>
             <div className="relative">
               <Search className="w-4 h-4 text-orange-400 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 value={tournamentQuery}
                 onChange={(e) => setTournamentQuery(e.target.value)}
-                placeholder="模糊搜索赛事名称，如：U12-14北方赛区羽毛球比赛"
+                placeholder="搜索赛事名称"
                 className="w-full pl-10 pr-4 py-3 rounded-2xl border border-orange-100 bg-white text-brand-brown outline-none focus:border-orange-300"
               />
             </div>
           </div>
           <div className="text-sm text-brand-gray min-w-[220px]">
-            当前统计对象：
+            当前赛事：
             <div className="mt-1 font-bold text-brand-brown">{loadedTournament || '尚未加载'}</div>
             <div className="mt-2 text-xs">
               当前状态：
@@ -785,7 +785,7 @@ export default function Stats() {
             className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-red-500 px-5 text-sm font-bold text-white shadow-md transition hover:from-orange-400 hover:to-red-400 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
           >
             <BarChart3 className={`h-4 w-4 ${loading || backgroundLoading ? 'animate-spin' : ''}`} />
-            {governanceChecking ? '准备中...' : loading ? '加载中...' : backgroundLoading ? '刷新中...' : '加载统计'}
+            {governanceChecking ? '准备中...' : loading ? '加载中...' : backgroundLoading ? '刷新中...' : '查看统计'}
           </button>
         </div>
       </div>
@@ -793,10 +793,10 @@ export default function Stats() {
       {!shouldPauseStats && !stats ? (
         <div className="w-full rounded-3xl border border-orange-100 bg-white/80 p-8 text-center text-brand-gray">
           {loading
-            ? '正在生成看板数据...'
+            ? '正在生成看板...'
             : loadedTournament
-              ? `赛事“${loadedTournament}”当前暂无可统计数据。${DATA_SOURCE_CONTACT_HINT}`
-              : '请选择赛事后点击“加载统计”。'}
+              ? `赛事“${loadedTournament}”暂时没有可展示的统计。${DATA_SOURCE_CONTACT_HINT}`
+              : '请选择赛事后点击“查看统计”。'}
         </div>
       ) : !shouldPauseStats ? (
       <div className={`w-full grid grid-cols-1 md:grid-cols-4 gap-6 mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
@@ -845,7 +845,7 @@ export default function Stats() {
       <div className={`w-full mb-12 ${backgroundLoading ? 'opacity-70' : ''}`}>
         <div className="bg-white/60 backdrop-blur-md rounded-3xl p-8 border border-orange-50">
           <h3 className="text-xl font-bold text-brand-brown mb-6 flex items-center gap-2">
-            <TrendingUp className="text-orange-500 w-5 h-5" /> 热门比赛组别分布
+            <TrendingUp className="text-orange-500 w-5 h-5" /> 热门组别分布
           </h3>
           <div className="space-y-4">
             {stats?.topCategories?.map((item, i) => (
@@ -877,16 +877,16 @@ export default function Stats() {
       <div className="w-full bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-orange-50 overflow-hidden relative">
         {backgroundLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 text-sm font-bold text-orange-600 backdrop-blur-[1px]">
-            正在更新下方统计表...
+            正在刷新数据...
           </div>
         )}
         <div className="px-6 py-5 border-b border-orange-100 bg-orange-50/40">
           <div className="flex items-center justify-between gap-4">
             <div>
               <h3 className="text-xl font-bold text-brand-brown flex items-center gap-2">
-                <Medal className="w-5 h-5 text-orange-500" /> 比赛详细排名（按组别/项目切换）
+                <Medal className="w-5 h-5 text-orange-500" /> 详细排名
               </h3>
-              <p className="text-sm text-brand-gray mt-1">当前为“胜场榜”口径（同胜场按胜率、场次排序）。</p>
+              <p className="mt-1 text-sm text-brand-gray">同胜场时按胜率和场次排序。</p>
             </div>
             <div className="flex flex-col items-end gap-2">
               {exportSuccess && (
@@ -911,7 +911,7 @@ export default function Stats() {
                 className="inline-flex items-center gap-2 rounded-full bg-white border-2 border-orange-500 text-orange-600 px-4 py-2 text-sm font-bold shadow-md transition hover:bg-orange-50 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Download className="w-4 h-4" />
-                {exportSuccess ? '已开始导出' : '导出CSV'}
+                {exportSuccess ? '已开始导出' : '导出表格'}
               </button>
               </div>
             </div>
@@ -941,10 +941,10 @@ export default function Stats() {
             <thead>
               <tr className="border-b border-orange-100 text-brand-brown">
                 <th className="p-4 font-bold w-16">排名</th>
-                <th className="p-4 font-bold">选手/组合</th>
-                <th className="p-4 font-bold">胜</th>
-                <th className="p-4 font-bold">负</th>
-                <th className="p-4 font-bold">场次</th>
+                <th className="p-4 font-bold">选手</th>
+                <th className="p-4 font-bold">胜场</th>
+                <th className="p-4 font-bold">负场</th>
+                <th className="p-4 font-bold">总场次</th>
                 <th className="p-4 font-bold">胜率</th>
               </tr>
             </thead>

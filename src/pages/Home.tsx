@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import { Search, Trophy, MapPin, Activity, Loader2, RefreshCw, Filter, ChevronDown, ChevronUp, X, Share2 } from 'lucide-react';
 import { getFriendlySupabaseErrorMessage, retrySupabaseOperation, supabase } from '../lib/supabase';
 import { format } from 'date-fns';
@@ -28,6 +28,8 @@ type MatchRow = {
   match_ended_at: string | null;
   round_name: string | null;
   match_time_name: string | null;
+  match_no: number | null;
+  court_num: number | null;
   city: string | null;
   location: string | null;
   players_a: string[];
@@ -109,12 +111,13 @@ export default function Home() {
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [viewMode, setViewMode] = useState<'intro' | 'search' | 'current'>('intro');
   const [syncStatus, setSyncStatus] = useState<SyncRunRow | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recentQueries, setRecentQueries] = useState<string[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const inFlightRef = useRef(false);
+  const currentInFlightRef = useRef(false);
   const lastMatchesSignatureRef = useRef('');
   const searchCacheRef = useRef(createLRUCache<string, MatchRow[]>(MAX_CACHE_SIZE));
 
@@ -123,6 +126,8 @@ export default function Home() {
   const [dateTo, setDateTo] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [tournamentFilter, setTournamentFilter] = useState('');
+  const [currentTournamentFilter, setCurrentTournamentFilter] = useState('');
+  const [currentSessionFilter, setCurrentSessionFilter] = useState('');
   const [sourceLabelByRaceId, setSourceLabelByRaceId] = useState<Record<string, string>>({});
   
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -276,6 +281,7 @@ export default function Home() {
   const hasPollingCandidate = matches.some((match) => isPollingPreferred(match));
 
   useEffect(() => {
+    if (viewMode !== 'search') return;
     if (!searchQuery.trim() || !hasPollingCandidate) return;
     const refreshIfVisible = () => {
       if (document.hidden) return;
@@ -293,9 +299,10 @@ export default function Home() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [autoRefresh, hasPollingCandidate, matches, searchQuery]);
+  }, [autoRefresh, hasPollingCandidate, matches, searchQuery, viewMode]);
 
   useEffect(() => {
+    if (viewMode !== 'intro') return;
     if (searchQuery.trim()) return;
     const refreshIfVisible = () => {
       if (document.hidden) return;
@@ -313,7 +320,27 @@ export default function Home() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [searchQuery]);
+  }, [searchQuery, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== 'current') return;
+    const refreshIfVisible = () => {
+      if (document.hidden) return;
+      void fetchCurrentMatches({ silent: true });
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void fetchCurrentMatches({ silent: true });
+      }
+    };
+    const timer = window.setInterval(refreshIfVisible, 10000);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [viewMode]);
 
   useEffect(() => {
     const refreshIfVisible = () => {
@@ -408,6 +435,37 @@ export default function Home() {
     }
   };
 
+  const fetchCurrentMatches = async (options?: { silent?: boolean }) => {
+    if (options?.silent) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    try {
+      const rpc = await retrySupabaseOperation(() =>
+        supabase.rpc('matchlife_current_matches', {
+          p_tournament_filter: null,
+          p_session_filter: null,
+          p_limit: 100,
+        }),
+      );
+
+      if (!rpc.error) {
+        applyMatches((rpc.data || []) as MatchRow[]);
+      } else {
+        setErrorMsg(getFriendlySupabaseErrorMessage(rpc.error));
+      }
+    } catch (error) {
+      setErrorMsg(getFriendlySupabaseErrorMessage(error));
+    } finally {
+      if (options?.silent) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  };
+
   const handleSearch = async (
     e?: React.FormEvent,
     q?: string,
@@ -417,10 +475,11 @@ export default function Home() {
     const keyword = (q ?? searchQuery).trim();
     setErrorMsg(null);
     if (!keyword) {
-      setSearched(false);
+      setViewMode('intro');
       fetchLatestMatches(options);
       return;
     }
+    setViewMode('search');
 
     if (options?.recordHistory !== false) {
       persistRecentQueries([keyword, ...recentQueries]);
@@ -429,7 +488,6 @@ export default function Home() {
     const cached = searchCacheRef.current.get(cacheKey);
     if (cached?.length) {
       applyMatches(cached);
-      setSearched(true);
       if (options?.silent) {
         setRefreshing(false);
         return;
@@ -442,7 +500,6 @@ export default function Home() {
       setRefreshing(true);
     } else {
       setLoading(true);
-      setSearched(true);
     }
     try {
       const rpc = await retrySupabaseOperation(() =>
@@ -486,6 +543,48 @@ export default function Home() {
 
   const hasActiveFilters = Boolean(dateFrom || dateTo || categoryFilter || tournamentFilter);
 
+  const buildSessionLabels = useCallback((match: MatchRow) => {
+    const labels: string[] = [];
+    const matchNo = typeof match.match_no === 'number' ? match.match_no : null;
+    const courtNum = typeof match.court_num === 'number' ? match.court_num : null;
+    if (match.round_name) labels.push(match.round_name);
+    if (match.match_time_name) labels.push(match.match_time_name);
+    if (courtNum !== null) labels.push(`${courtNum}号场`);
+    if (matchNo !== null) labels.push(`第${matchNo}场`);
+    return labels;
+  }, []);
+
+  const currentTournamentOptions = useMemo(() => {
+    if (viewMode !== 'current') return [];
+    const uniq = new Set<string>();
+    for (const match of matches) {
+      const name = String(match.tournament_name || '').trim();
+      if (name) uniq.add(name);
+    }
+    return Array.from(uniq).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [matches, viewMode]);
+
+  const currentSessionOptions = useMemo(() => {
+    if (viewMode !== 'current') return [];
+    const uniq = new Set<string>();
+    for (const match of matches) {
+      for (const label of buildSessionLabels(match)) {
+        const val = String(label || '').trim();
+        if (val) uniq.add(val);
+      }
+    }
+    return Array.from(uniq).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [matches, viewMode]);
+
+  const visibleMatches = useMemo(() => {
+    if (viewMode !== 'current') return matches;
+    return matches.filter((match) => {
+      if (currentTournamentFilter && match.tournament_name !== currentTournamentFilter) return false;
+      if (currentSessionFilter && !buildSessionLabels(match).includes(currentSessionFilter)) return false;
+      return true;
+    });
+  }, [buildSessionLabels, currentSessionFilter, currentTournamentFilter, matches, viewMode]);
+
   const fetchSuggestions = async (q: string) => {
     if (!q.trim() || q.trim().length < 2) {
       setSuggestions([]);
@@ -527,10 +626,22 @@ export default function Home() {
     handleSearch(undefined, suggestion);
   };
 
+  const openCurrentMatches = async () => {
+    if (currentInFlightRef.current) return;
+    currentInFlightRef.current = true;
+    setSearchQuery('');
+    setViewMode('current');
+    try {
+      await fetchCurrentMatches();
+    } finally {
+      currentInFlightRef.current = false;
+    }
+  };
+
   return (
     <div className="flex flex-col items-center pt-10 pb-20">
 
-      <div className="w-full max-w-3xl text-center space-y-8 mt-10">
+      <div className="mt-8 w-full max-w-3xl space-y-6 text-center">
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/60 border border-orange-200 text-orange-600 text-sm font-bold shadow-sm backdrop-blur-sm mb-4">
           <span className="relative flex h-3 w-3">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
@@ -552,10 +663,8 @@ export default function Home() {
           </span>
         </h1>
         
-        <p className="max-w-2xl mx-auto text-base font-medium text-brand-gray sm:text-lg">
-          更快查看比赛结果、比分变化和赛事进展。
-          <br />
-          支持检索比赛结果、赛事排名与历史记录。
+        <p className="mx-auto max-w-2xl text-base font-medium text-brand-gray sm:text-lg">
+          更快找到比赛结果、比分变化和赛事进展。
         </p>
 
         <form onSubmit={handleSearch} className="relative mt-8 group">
@@ -570,17 +679,17 @@ export default function Home() {
               onChange={handleSearchInputChange}
               onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-              placeholder="搜索赛事名称、运动员名称、赛事日期..."
+              placeholder="搜索赛事、选手、日期..."
               className="w-full border-none bg-transparent px-4 py-3 text-base font-medium text-brand-brown outline-none placeholder-orange-300 focus:ring-0 sm:text-lg"
             />
             <PressHint
               message={
                 canAutoRefresh
                   ? autoRefresh
-                    ? '正在每 10 秒自动刷新当前检索结果，点击可关闭自动刷新。'
+                      ? '当前每 10 秒自动刷新一次，点击可关闭。'
                     : hasPollingCandidate
-                      ? '当前有比赛结果仍在变化，页面默认每 30 秒刷新；开启后会加速到每 10 秒。'
-                      : '开启后会每 10 秒自动刷新当前检索结果，适合盯比分时使用。'
+                      ? '当前比分仍在变化，默认 30 秒刷新；开启后会加速到 10 秒。'
+                      : '开启后会每 10 秒自动刷新一次，适合盯比分时使用。'
                   : '请先输入检索内容，再开启自动刷新。'
               }
               className="mr-2"
@@ -658,7 +767,7 @@ export default function Home() {
           >
             <div className="flex items-center gap-2">
               <Filter className="w-5 h-5 text-orange-500" />
-              <span className="font-bold text-brand-brown">高级筛选</span>
+              <span className="font-bold text-brand-brown">更多筛选</span>
               {hasActiveFilters && (
                 <span className="px-2 py-0.5 bg-orange-500 text-white text-xs rounded-full font-bold">
                   {[dateFrom, dateTo, categoryFilter, tournamentFilter].filter(Boolean).length}
@@ -677,7 +786,7 @@ export default function Home() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-brand-brown mb-2">
-                    开始日期
+                    开始时间
                   </label>
                   <input
                     type="date"
@@ -688,7 +797,7 @@ export default function Home() {
                 </div>
                 <div>
                   <label className="block text-sm font-bold text-brand-brown mb-2">
-                    结束日期
+                    结束时间
                   </label>
                   <input
                     type="date"
@@ -701,7 +810,7 @@ export default function Home() {
 
               <div>
                 <label className="block text-sm font-bold text-brand-brown mb-2">
-                  U组别筛选
+                  组别
                 </label>
                 <input
                   type="text"
@@ -714,7 +823,7 @@ export default function Home() {
 
               <div>
                 <label className="block text-sm font-bold text-brand-brown mb-2">
-                  赛事名称筛选
+                  赛事名称
                 </label>
                 <input
                   type="text"
@@ -751,14 +860,15 @@ export default function Home() {
         </div>
 
         <div className="flex flex-wrap justify-center gap-3 mt-6">
-          <button onClick={() => { const q = ''; setSearchQuery(q); handleSearch(undefined, q); }} className="px-4 py-2 rounded-2xl bg-white/80 text-brand-gray text-sm border border-orange-50 hover:border-orange-300 hover:text-orange-600 cursor-pointer transition-colors shadow-sm backdrop-blur-sm">
-            📅 近期比赛
+          <button onClick={openCurrentMatches} className="px-4 py-2 rounded-2xl bg-white/80 text-brand-gray text-sm border border-orange-50 hover:border-orange-300 hover:text-orange-600 cursor-pointer transition-colors shadow-sm backdrop-blur-sm">
+            ⏱ 当前比赛
           </button>
           {recentQueries.map((q) => (
             <div key={q} className="inline-flex items-center rounded-2xl bg-white/80 border border-orange-50 shadow-sm backdrop-blur-sm overflow-hidden">
               <button
                 onClick={() => {
                   setSearchQuery(q);
+                  setViewMode('search');
                   handleSearch(undefined, q);
                 }}
                 className="px-4 py-2 text-brand-gray text-sm hover:text-orange-600 transition-colors"
@@ -783,28 +893,84 @@ export default function Home() {
         </div>
       )}
 
-      {searched && (
-        <div className="w-full max-w-5xl mt-16 flex flex-col gap-4">
-          <h2 className="text-2xl font-bold text-brand-brown mb-4">检索结果</h2>
+      {viewMode !== 'intro' && (
+        <div className="mt-12 flex w-full max-w-5xl flex-col gap-4">
+          <h2 className="text-2xl font-bold text-brand-brown mb-4">{viewMode === 'current' ? '当前比赛' : '检索结果'}</h2>
+
+          {viewMode === 'current' && (
+            <div className="flex flex-col gap-3 rounded-3xl border border-orange-100 bg-white/70 p-4 shadow-sm backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-1 flex-col gap-3 sm:flex-row">
+                <select
+                  value={currentTournamentFilter}
+                  onChange={(e) => setCurrentTournamentFilter(e.target.value)}
+                  className="w-full rounded-2xl border border-orange-100 bg-white px-4 py-2 text-sm font-semibold text-brand-brown outline-none focus:border-orange-300 sm:w-auto sm:min-w-[220px]"
+                >
+                  <option value="">全部赛事</option>
+                  {currentTournamentOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={currentSessionFilter}
+                  onChange={(e) => setCurrentSessionFilter(e.target.value)}
+                  className="w-full rounded-2xl border border-orange-100 bg-white px-4 py-2 text-sm font-semibold text-brand-brown outline-none focus:border-orange-300 sm:w-auto sm:min-w-[200px]"
+                >
+                  <option value="">全部场次</option>
+                  {currentSessionOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentTournamentFilter('');
+                  setCurrentSessionFilter('');
+                }}
+                className="w-full rounded-2xl border border-orange-200 bg-white px-4 py-2 text-sm font-bold text-orange-600 transition-colors hover:bg-orange-50 sm:w-auto"
+              >
+                清空筛选
+              </button>
+            </div>
+          )}
           
           {loading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
             </div>
-          ) : matches.length > 0 ? (
-            matches.map((match) => (
+          ) : visibleMatches.length > 0 ? (
+            visibleMatches.map((match) => (
               <div
                 key={match.id}
-                className={`rounded-3xl p-6 shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow ${getMatchCardClass(match)}`}
+                className={`rounded-3xl border p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5 md:flex md:flex-row md:items-center md:justify-between md:gap-4 md:p-6 ${getMatchCardClass(match)}`}
               >
                 <div
-                  className={`flex-1 ${getDetailMatchRef(match) ? 'cursor-pointer' : 'cursor-default'}`}
+                  className={`min-w-0 flex-1 ${getDetailMatchRef(match) ? 'cursor-pointer' : 'cursor-default'}`}
                   onClick={() => openMatchDetail(match)}
                 >
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
                     <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-bold">{match.category}</span>
                     {match.round_name && (
                       <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-extrabold">{match.round_name}</span>
+                    )}
+                    {match.match_time_name && (
+                      <span className="px-3 py-1 bg-white text-brand-gray border border-orange-100 rounded-full text-xs font-bold">
+                        {match.match_time_name}
+                      </span>
+                    )}
+                    {typeof match.court_num === 'number' && (
+                      <span className="px-3 py-1 bg-white text-brand-gray border border-orange-100 rounded-full text-xs font-bold">
+                        {match.court_num}号场
+                      </span>
+                    )}
+                    {typeof match.match_no === 'number' && (
+                      <span className="px-3 py-1 bg-white text-brand-gray border border-orange-100 rounded-full text-xs font-bold">
+                        第{match.match_no}场
+                      </span>
                     )}
                     {match.start_time ? (
                       <span className="px-3 py-1 rounded-full bg-white text-brand-gray border border-orange-100 text-xs font-bold">
@@ -812,7 +978,7 @@ export default function Home() {
                       </span>
                     ) : null}
                   </div>
-                  <h3 className="text-lg font-bold text-brand-brown">{match.tournament_name}</h3>
+                  <h3 className="text-lg font-bold text-brand-brown break-words">{match.tournament_name}</h3>
                   {match.winner_side === 'UNKNOWN' && (
                     <div className="flex flex-wrap items-center gap-3 text-xs text-sky-700/80 mt-2 font-medium">
                       {(() => {
@@ -827,35 +993,59 @@ export default function Home() {
                       })()}
                     </div>
                   )}
-                  <div className="flex items-center gap-1 text-sm text-brand-gray mt-1">
+                  <div className="mt-1 flex items-start gap-1 text-sm text-brand-gray">
                     <MapPin className="w-4 h-4" />
-                    <span>{match.city || match.location || '未知场地'}</span>
+                    <span className="break-words">{match.city || match.location || '未知场地'}</span>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-end gap-3">
+                <div className="flex flex-col gap-3 md:items-end">
                   <div
-                    className={`flex items-center justify-between md:justify-end gap-2 md:gap-6 bg-orange-50/50 px-4 md:px-6 py-4 rounded-2xl w-full md:w-auto ${
+                    className={`w-full rounded-2xl bg-orange-50/50 px-4 py-4 md:w-auto md:px-6 ${
                       getDetailMatchRef(match) ? 'cursor-pointer' : 'cursor-default'
                     }`}
                     onClick={() => openMatchDetail(match)}
                   >
-                    <div className="text-right flex-1 md:flex-none">
-                      <div className={`font-bold ${match.winner_side === 'A' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
-                        {match.players_a?.join(' / ')}
+                    <div className="flex flex-col gap-3 md:hidden">
+                      <div className="text-center">
+                        <div className={`break-words font-bold leading-6 ${match.winner_side === 'A' ? 'text-lg text-orange-600' : 'text-brand-brown'}`}>
+                          {match.players_a?.join(' / ')}
+                        </div>
+                        {match.winner_side === 'A' && <span className="text-xs font-medium text-orange-500">Winner</span>}
                       </div>
-                      {match.winner_side === 'A' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
-                    </div>
-                    
-                    <div className="text-xl md:text-2xl font-extrabold text-brand-brown tracking-wider bg-white px-3 md:px-4 py-1 rounded-xl shadow-sm border border-orange-100 flex-shrink-0">
-                      {match.score_text || (match.is_realtime ? '比赛进行中' : '-')}
-                    </div>
-                    
-                    <div className="text-left flex-1 md:flex-none">
-                      <div className={`font-bold ${match.winner_side === 'B' ? 'text-orange-600 text-lg' : 'text-brand-brown'}`}>
-                        {match.players_b?.join(' / ')}
+
+                      <div className="flex justify-center">
+                        <div className="flex-shrink-0 rounded-xl border border-orange-100 bg-white px-4 py-1 text-xl font-extrabold tracking-wider text-brand-brown shadow-sm">
+                          {match.score_text || (match.is_realtime ? '比赛进行中' : '-')}
+                        </div>
                       </div>
-                      {match.winner_side === 'B' && <span className="text-xs text-orange-500 font-medium">Winner</span>}
+
+                      <div className="text-center">
+                        <div className={`break-words font-bold leading-6 ${match.winner_side === 'B' ? 'text-lg text-orange-600' : 'text-brand-brown'}`}>
+                          {match.players_b?.join(' / ')}
+                        </div>
+                        {match.winner_side === 'B' && <span className="text-xs font-medium text-orange-500">Winner</span>}
+                      </div>
+                    </div>
+
+                    <div className="hidden items-center justify-between gap-2 md:flex md:gap-6 md:justify-end">
+                      <div className="flex-1 text-right md:flex-none">
+                        <div className={`break-words font-bold ${match.winner_side === 'A' ? 'text-lg text-orange-600' : 'text-brand-brown'}`}>
+                          {match.players_a?.join(' / ')}
+                        </div>
+                        {match.winner_side === 'A' && <span className="text-xs font-medium text-orange-500">Winner</span>}
+                      </div>
+
+                      <div className="flex-shrink-0 rounded-xl border border-orange-100 bg-white px-3 py-1 text-xl font-extrabold tracking-wider text-brand-brown shadow-sm md:px-4 md:text-2xl">
+                        {match.score_text || (match.is_realtime ? '比赛进行中' : '-')}
+                      </div>
+
+                      <div className="flex-1 text-left md:flex-none">
+                        <div className={`break-words font-bold ${match.winner_side === 'B' ? 'text-lg text-orange-600' : 'text-brand-brown'}`}>
+                          {match.players_b?.join(' / ')}
+                        </div>
+                        {match.winner_side === 'B' && <span className="text-xs font-medium text-orange-500">Winner</span>}
+                      </div>
                     </div>
                   </div>
                   
@@ -883,7 +1073,7 @@ export default function Home() {
                         }),
                       );
                     }}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-xl text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-orange-100 px-4 py-2 text-xs font-bold text-orange-700 transition-colors hover:bg-orange-200 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 md:w-auto"
                   >
                     <Share2 className="w-3.5 h-3.5" />
                     {getDetailMatchRef(match) ? '分享比赛' : '详情待就绪'}
@@ -893,19 +1083,19 @@ export default function Home() {
             ))
           ) : (
             <div className="text-center py-12 bg-white/50 rounded-3xl border border-orange-50">
-              <p className="text-brand-gray text-lg">没有找到相关比赛记录</p>
+              <p className="text-brand-gray text-lg">暂未找到相关结果</p>
               <p className="mt-2 text-sm text-brand-gray">{DATA_SOURCE_CONTACT_HINT}</p>
             </div>
           )}
         </div>
       )}
 
-      {!searched && (
-        <div className="mt-24 w-full max-w-5xl rounded-[32px] border border-orange-100 bg-white/80 p-6 shadow-sm backdrop-blur-sm sm:p-8">
-          <div className="mb-6 text-center">
+      {viewMode === 'intro' && (
+        <div className="mt-16 w-full max-w-5xl rounded-[32px] border border-orange-100 bg-white/80 p-5 shadow-sm backdrop-blur-sm sm:p-7">
+          <div className="mb-5 text-center">
             <h2 className="text-2xl font-extrabold text-brand-brown">更快找到你关心的比赛</h2>
             <p className="mt-2 text-sm text-brand-gray sm:text-base">
-              支持按赛事、选手和日期检索结果，优先把最有用的信息直接展示给你。
+              赛事、选手和比分信息会尽量直接展示给你。
             </p>
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -915,7 +1105,7 @@ export default function Home() {
               </div>
               <h3 className="text-lg font-bold text-brand-brown">快速查看结果</h3>
               <p className="mt-2 text-sm text-brand-gray">
-                赛事名称、参赛选手、比分和场地信息集中展示，减少来回翻找。
+                比赛、比分和场地集中展示，减少来回翻找。
               </p>
             </div>
             <div className="rounded-3xl border border-orange-100 bg-gradient-to-br from-amber-50/80 to-white p-6 shadow-sm">
@@ -924,7 +1114,7 @@ export default function Home() {
               </div>
               <h3 className="text-lg font-bold text-brand-brown">及时了解进展</h3>
               <p className="mt-2 text-sm text-brand-gray">
-                比赛进行中时优先展示关键时间和比分变化，方便你快速判断当前进度。
+                比赛进行中时优先展示关键时间和比分变化。
               </p>
             </div>
           </div>

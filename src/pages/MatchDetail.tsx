@@ -575,12 +575,12 @@ export function MatchDetail() {
           </div>
 
           <div className="flex flex-col items-center gap-2">
-            <span className="text-sm text-text-sub mb-1">来源平台更新</span>
+            <span className="text-sm text-text-sub mb-1">最近更新</span>
             <span className="text-brand-600 font-medium">{formatUpdateTime(match.source_updated_at)}</span>
             {shouldPoll && (
               <div className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">
                 <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                {refreshing ? '轮询刷新中' : '每 5 秒轮询'}
+                {refreshing ? '正在刷新' : '自动刷新中'}
               </div>
             )}
           </div>
@@ -641,11 +641,11 @@ export function MatchDetail() {
           <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-4">
             <Activity className="w-8 h-8 text-orange-400" />
           </div>
-          <h3 className="text-xl font-bold text-brand-800 mb-2">暂无过程数据</h3>
+          <h3 className="text-xl font-bold text-brand-800 mb-2">还没有比赛记录</h3>
           <p className="text-brand-gray max-w-md mb-6">
             {taggingPath
-              ? '当前比赛还没有补充更多记录。您可以点击下方按钮，补充关键回合、时间点和比赛笔记。'
-              : '当前比赛结果确认后，可以继续补充这场比赛的更多记录。'}
+              ? '这场比赛还没补充更多内容，你可以继续添加关键记录。'
+              : '这场比赛确认后，可继续补充更多记录。'}
           </p>
           {taggingPath ? (
             <Link
@@ -653,12 +653,12 @@ export function MatchDetail() {
               className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-orange-400 to-orange-500 text-white font-bold rounded-full shadow hover:shadow-lg transition-all"
             >
               <Tags className="w-4 h-4" />
-              去补充比赛笔记
+              去补充记录
             </Link>
           ) : (
             <div className="inline-flex items-center gap-2 px-6 py-3 bg-gray-100 text-gray-500 font-bold rounded-full">
               <Tags className="w-4 h-4" />
-              结果确认后开放
+              稍后开放
             </div>
           )}
         </div>
@@ -667,7 +667,7 @@ export function MatchDetail() {
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8 flex flex-col">
             <h2 className="text-xl font-bold text-text-main mb-6 flex items-center gap-2">
               <Activity className="w-5 h-5 text-orange-500" />
-              过程数据概览
+              比赛记录概览
             </h2>
             <div className="space-y-6 flex-1">
               <div className="grid grid-cols-2 gap-4">
@@ -675,14 +675,14 @@ export function MatchDetail() {
                   <div className="absolute -right-2 -top-2 opacity-5">
                     <Activity className="w-16 h-16" />
                   </div>
-                  <div className="text-sm font-medium text-brand-gray mb-1">标签总数</div>
+                  <div className="text-sm font-medium text-brand-gray mb-1">记录总数</div>
                   <div className="text-4xl font-black text-orange-600">{matchEvents.length}</div>
                 </div>
                 <div className="rounded-2xl bg-gradient-to-br from-green-50 to-white px-5 py-5 border border-green-100 shadow-sm relative overflow-hidden">
                   <div className="absolute -right-2 -top-2 opacity-5">
                     <Tags className="w-16 h-16" />
                   </div>
-                  <div className="text-sm font-medium text-brand-gray mb-1">已验证标签</div>
+                  <div className="text-sm font-medium text-brand-gray mb-1">已确认</div>
                   <div className="text-4xl font-black text-green-600">
                     {matchEvents.filter((event) => event.isVerified).length}
                   </div>
@@ -690,7 +690,7 @@ export function MatchDetail() {
               </div>
 
               <div>
-                <h3 className="text-sm font-bold text-brand-gray mb-3 px-1">标签分类统计</h3>
+                <h3 className="text-sm font-bold text-brand-gray mb-3 px-1">记录分布</h3>
                 <div className="space-y-3">
                   {eventSummary.map((item) => (
                     <div key={item.category} className="group relative flex items-center justify-between rounded-2xl border border-orange-100/50 bg-white px-5 py-3.5 hover:border-orange-200 hover:shadow-sm transition-all overflow-hidden">
@@ -710,7 +710,7 @@ export function MatchDetail() {
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8 flex flex-col">
             <h2 className="text-xl font-bold text-text-main mb-6 flex items-center gap-2">
               <Tags className="w-5 h-5 text-orange-500" />
-              比赛事件时间轴
+              比赛时间轴
             </h2>
             <div className="space-y-0 relative before:absolute before:inset-0 before:ml-[1.4rem] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-orange-200 before:to-transparent max-h-[520px] overflow-y-auto pr-2 custom-scrollbar">
               {timelineEvents.map((event, index) => (

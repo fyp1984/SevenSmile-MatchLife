@@ -14,7 +14,7 @@ const LEGACY_LOCAL_API_BASE_PATH = '/api';
 const ACCESS_COOKIE = 'matchlife_wechat_ok';
 const ACCESS_VERSION_COOKIE = 'matchlife_wechat_ver';
 const ACCESS_SESSION_COOKIE = 'matchlife_wechat_session';
-const ACCESS_COOKIE_TTL = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
+const FOLLOW_SESSION_TTL_SECONDS = Number(process.env.WECHAT_SESSION_TTL_SECONDS || 12 * 60 * 60);
 const ACCESS_VERSION = String(process.env.WECHAT_ACCESS_VERSION || '').trim() || new Date().toISOString().slice(0, 10);
 const SESSION_FORCE_CHECK_GRACE_MS = Number(process.env.WECHAT_SESSION_FORCE_CHECK_GRACE_MS || 60 * 1000);
 const ACCESS_LINK_KEYWORD = String(process.env.WECHAT_ACCESS_KEYWORD || '比赛生涯').trim();
@@ -61,6 +61,11 @@ function maskOpenid(openid) {
 function firstHeader(v) {
   if (Array.isArray(v)) return v[0] || '';
   return typeof v === 'string' ? v : '';
+}
+
+function isWechatBrowserRequest(req) {
+  const ua = firstHeader(req.headers['user-agent']).toLowerCase();
+  return ua.includes('micromessenger');
 }
 
 function safeDecodeURIComponent(value) {
@@ -149,34 +154,43 @@ function redirect(res, location) {
 }
 
 function issueAccessSessionCookie(openid) {
-  if (!openid) return '';
-  const payload = {
-    o: openid,
-    v: ACCESS_VERSION,
-    i: Date.now(),
-    e: Date.now() + ACCESS_COOKIE_TTL * 1000,
-  };
+  const payload = openid;
   const encoded = base64url(JSON.stringify(payload));
   return `${encoded}.${signValue(encoded)}`;
 }
 
-function parseAccessSessionCookie(value) {
+function parseAccessSessionCookie(value, options = {}) {
   if (!value || typeof value !== 'string' || !value.includes('.')) {
     throw new Error('invalid session cookie');
   }
   const [encoded, sig] = value.split('.', 2);
   if (signValue(encoded) !== sig) throw new Error('bad session signature');
   const payload = JSON.parse(base64urlDecode(encoded));
-  if (!payload?.o || !payload?.e) throw new Error('bad session payload');
-  if (Number(payload.e) < Date.now()) throw new Error('expired session');
+  if (!payload?.t || !payload?.v || !payload?.e) throw new Error('bad session payload');
+  if (!options.allowExpired && Number(payload.e) < Date.now()) throw new Error('expired session');
   return payload;
 }
 
-function setAccessCookie(res, enabled, openid = '') {
-  const maxAge = enabled ? ACCESS_COOKIE_TTL : 0;
+function issueFollowSessionPayload(openid) {
+  return {
+    t: 'follow',
+    o: openid,
+    v: ACCESS_VERSION,
+    i: Date.now(),
+    e: Date.now() + FOLLOW_SESSION_TTL_SECONDS * 1000,
+  };
+}
+
+function getCookieMaxAgeSeconds(sessionPayload = null) {
+  if (!sessionPayload?.e) return 0;
+  return Math.max(0, Math.ceil((Number(sessionPayload.e) - Date.now()) / 1000));
+}
+
+function setAccessCookie(res, enabled, sessionPayload = null) {
+  const maxAge = enabled ? getCookieMaxAgeSeconds(sessionPayload) : 0;
   const value = enabled ? '1' : '';
-  const version = enabled ? ACCESS_VERSION : '';
-  const session = enabled ? issueAccessSessionCookie(openid) : '';
+  const version = enabled ? sessionPayload?.v || ACCESS_VERSION : '';
+  const session = enabled && sessionPayload ? issueAccessSessionCookie(sessionPayload) : '';
   res.setHeader('Set-Cookie', [
     `${ACCESS_COOKIE}=${value}; Max-Age=${maxAge}; Path=${APP_BASE_PATH || '/'}; SameSite=Lax; Secure`,
     `${ACCESS_VERSION_COOKIE}=${version}; Max-Age=${maxAge}; Path=${APP_BASE_PATH || '/'}; SameSite=Lax; Secure`,
@@ -375,19 +389,25 @@ async function handleSessionStatus(req, res) {
 
   try {
     const cookies = parseCookies(req);
-    const session = parseAccessSessionCookie(cookies[ACCESS_SESSION_COOKIE] || '');
+    const session = parseAccessSessionCookie(cookies[ACCESS_SESSION_COOKIE] || '', { allowExpired: true });
     if (session.v && session.v !== ACCESS_VERSION) throw new Error('session version mismatch');
-    const issuedAt = Number(session.i || 0);
-    const forceRemoteCheck = !issuedAt || Date.now() - issuedAt > SESSION_FORCE_CHECK_GRACE_MS;
-    const subscribed = await checkFollowStatus(session.o, { force: forceRemoteCheck });
+
+    if (Number(session.e) < Date.now()) {
+      setAccessCookie(res, false);
+      sendJson(res, 401, { ok: false, error: '会话已过期，请重新验证' });
+      return;
+    }
+
+    const subscribed = await checkFollowStatus(session.o, { force: true });
     if (!subscribed) {
       log('session status unsubscribed', maskOpenid(session.o));
       setAccessCookie(res, false);
       sendJson(res, 403, { ok: false, error: '请先关注公众号后再进入', redirectToFollow: true });
       return;
     }
-    setAccessCookie(res, true, session.o);
-    sendJson(res, 200, { ok: true, version: ACCESS_VERSION });
+    const renewedSession = issueFollowSessionPayload(session.o);
+    setAccessCookie(res, true, renewedSession);
+    sendJson(res, 200, { ok: true, version: ACCESS_VERSION, accessType: 'follow', expiresAt: renewedSession.e });
   } catch (error) {
     log('session status failed', error instanceof Error ? error.message : String(error));
     setAccessCookie(res, false);
@@ -487,7 +507,7 @@ async function handleOauthCallback(req, res, url) {
       return;
     }
 
-    setAccessCookie(res, true, openid);
+    setAccessCookie(res, true, issueFollowSessionPayload(openid));
     redirect(res, `${toAppUrl(origin, '/wechat/complete')}?ok=1&next=${encodeURIComponent(next)}`);
   } catch (error) {
     log('oauth callback failed', error instanceof Error ? error.message : String(error));
@@ -496,49 +516,13 @@ async function handleOauthCallback(req, res, url) {
   }
 }
 
-async function handleAccessCodeVerify(req, res) {
-  if (STRICT_FOLLOW_CHECK) {
-    setAccessCookie(res, false);
-    sendJson(res, 403, { ok: false, error: '当前环境必须先关注服务号，请使用微信内一键进入' });
-    return;
-  }
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  let body = {};
-  try {
-    body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-  } catch {
-    body = {};
-  }
-
-  const code = String(body?.code || '').trim().toUpperCase();
-  const next = safeNext(body?.next || '/');
-  const codes = getCodes();
-
-  if (!codes.length) {
-    sendJson(res, 500, { ok: false, error: '服务端未配置访问码' });
-    return;
-  }
-
-  if (!code || !codes.includes(code)) {
-    setAccessCookie(res, false);
-    sendJson(res, 401, { ok: false, error: '访问码错误或已过期' });
-    return;
-  }
-
-  setAccessCookie(res, true);
-  sendJson(res, 200, { ok: true, next, version: ACCESS_VERSION });
-}
-
 async function handleMagicLinkConsume(req, res, url) {
   try {
     const ticket = String(url.searchParams.get('ticket') || '');
     const payload = parseMagicTicket(ticket);
     let subscribed = true;
     try {
-      subscribed = await checkFollowStatus(payload.o);
+      subscribed = await checkFollowStatus(payload.o, { force: true });
     } catch (error) {
       if (STRICT_FOLLOW_CHECK) throw error;
       log('follow check degraded', error instanceof Error ? error.message : String(error));
@@ -549,7 +533,7 @@ async function handleMagicLinkConsume(req, res, url) {
       return;
     }
     usedTickets.set(payload.n, Number(payload.e));
-    setAccessCookie(res, true, payload.o);
+    setAccessCookie(res, true, issueFollowSessionPayload(payload.o));
     sendJson(res, 200, { ok: true, next: safeNext(payload.p || '/'), version: ACCESS_VERSION });
   } catch (error) {
     setAccessCookie(res, false);
@@ -744,11 +728,6 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && isApiPath(url.pathname, '/session-status')) {
       await handleSessionStatus(req, res);
-      return;
-    }
-
-    if (req.method === 'POST' && isApiPath(url.pathname, '/access-code/verify')) {
-      await handleAccessCodeVerify(req, res);
       return;
     }
 

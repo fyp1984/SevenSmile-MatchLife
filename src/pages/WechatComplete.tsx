@@ -5,7 +5,7 @@ import { markWechatAccess, sanitizeNextPath } from '../lib/wechatAccess';
 export default function WechatComplete() {
   const nav = useNavigate();
   const loc = useLocation();
-  const [message, setMessage] = useState('正在验证身份...');
+  const [message, setMessage] = useState('正在为你确认访问资格...');
   const magicLinkConsumeUrl = `${import.meta.env.BASE_URL}api/wechat/magic-link/consume`;
 
   const { ok, next, ticket } = useMemo(() => {
@@ -29,7 +29,7 @@ export default function WechatComplete() {
               const target = json?.redirectToFollow
                 ? `/follow?next=${encodeURIComponent(next)}`
                 : `/gate/wechat?next=${encodeURIComponent(next)}`;
-              setMessage(json?.error || '链接已失效，正在返回验证页...');
+              setMessage(json?.error || '当前链接已失效，正在带你返回...');
               window.setTimeout(() => {
                 nav(target, { replace: true });
               }, 800);
@@ -43,7 +43,7 @@ export default function WechatComplete() {
           return;
         } catch {
           if (!cancelled) {
-            setMessage('验证失败，正在返回验证页...');
+            setMessage('暂时没能完成验证，正在带你返回...');
             window.setTimeout(() => {
               nav(`/gate/wechat?next=${encodeURIComponent(next)}`, { replace: true });
             }, 800);
@@ -68,6 +68,10 @@ export default function WechatComplete() {
   }, [ok, next, ticket, nav]);
 
   return (
-    <div className="p-20 text-center text-orange-500 font-bold">{message}</div>
+    <div className="mx-auto max-w-lg pt-12">
+      <div className="rounded-3xl border border-orange-100 bg-white/80 p-8 text-center shadow-sm backdrop-blur-sm">
+        <div className="text-lg font-bold text-orange-500">{message}</div>
+      </div>
+    </div>
   );
 }

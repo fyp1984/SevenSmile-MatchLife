@@ -37,6 +37,7 @@ function App() {
         <Routes>
           <Route path="/" element={<WechatProtectedLayout />}>
             <Route index element={<Home />} />
+            <Route path="guide" element={<Guide />} />
             <Route path="stats" element={<Stats />} />
             <Route path="leaderboard" element={<Leaderboard />} />
             <Route path="player/:name" element={<PlayerCareer />} />
@@ -44,7 +45,6 @@ function App() {
             <Route path="matches/:matchId/tagging" element={<MatchTagging />} />
             <Route path="sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
             <Route path="data-sources" element={<GateProtectedRoute><DataSources /></GateProtectedRoute>} />
-            <Route path="guide" element={<Guide />} />
             <Route path="gate" element={<AccessGate />} />
             <Route path="gate/wechat" element={<WechatGate />} />
             <Route path="wechat/complete" element={<WechatComplete />} />

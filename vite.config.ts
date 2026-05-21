@@ -289,9 +289,9 @@ export default defineConfig(({ mode }) => {
             });
           });
 
-          server.middlewares.use('/api/wechat/access-code/verify', (req, res) => {
+          server.middlewares.use('/api/wechat/session-status', (req, res) => {
             (async () => {
-              const mod = await import('./api/wechat/access-code-verify');
+              const mod = await import('./api/wechat/session-status');
               const handler = mod.default as (req: unknown, res: unknown) => Promise<void> | void;
               await handler(req, res);
             })().catch((e) => {

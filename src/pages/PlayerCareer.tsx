@@ -582,7 +582,7 @@ export function PlayerCareer() {
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-orange-200 bg-orange-50/60 px-4 py-3 text-sm text-brand-gray">
-              当前仅展示比赛侧生涯数据，选手基础档案尚未完善，可在后台补充头像、俱乐部、教练与惯用手信息。
+              当前先展示比赛里的生涯数据，选手资料可后续再补充。
             </div>
           )}
           <div className="flex flex-wrap justify-center md:justify-start gap-4">
@@ -603,20 +603,20 @@ export function PlayerCareer() {
       </div>
 
       {historicalTrend.length > 0 ? (
-        <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8">
+        <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-6 sm:p-8">
           <h2 className="text-2xl font-bold text-text-main mb-6 flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-brand-500" />
-            <span>胜率趋势与未来预测</span>
+            <span>胜率走势</span>
           </h2>
           <div className="mb-6 rounded-2xl border border-orange-100 bg-gradient-to-br from-orange-50 via-white to-amber-50 px-5 py-4 text-sm text-brand-brown">
-            <p className="font-bold text-base">近 12 个月胜率走势</p>
+            <p className="font-bold text-base">近 12 个月表现</p>
             <p className="mt-1 text-brand-gray">
-              基于一年前至本月的参赛结果，结合最近表现、阶段趋势与样本权重，预测未来 3 个月的胜率曲线。
+              这里会展示近一年的走势，并给出未来 3 个月的参考变化。
             </p>
             {forecastSummary && (
               <p className="mt-2 text-orange-700 font-semibold">
-                预测区间：未来 3 个月大致维持在 {forecastSummary.minRate}% - {forecastSummary.maxRate}%，
-                中枢约 {forecastSummary.averageRate}%。
+                未来 3 个月大致会保持在 {forecastSummary.minRate}% - {forecastSummary.maxRate}%，
+                参考值约 {forecastSummary.averageRate}%。
               </p>
             )}
           </div>
@@ -681,7 +681,7 @@ export function PlayerCareer() {
                       {data.label}
                     </text>
                     <text x={x} y={y - 12} textAnchor="middle" fontSize="10" fontWeight="700" fill="#9A3412">
-                      预测 {data.winRate.toFixed(0)}%
+                      参考 {data.winRate.toFixed(0)}%
                     </text>
                   </g>
                 );
@@ -731,15 +731,15 @@ export function PlayerCareer() {
               <line x1="730" y1="44" x2="770" y2="44" stroke="url(#forecastGradient)" strokeWidth="4" strokeLinecap="round" />
               <text x="780" y="48" fontSize="12" fontWeight="700" fill="#6B3B20">历史趋势</text>
               <line x1="730" y1="62" x2="770" y2="62" stroke="#9A3412" strokeWidth="3" strokeDasharray="10 8" strokeLinecap="round" />
-              <text x="780" y="66" fontSize="12" fontWeight="700" fill="#6B3B20">未来 3 个月预测</text>
+              <text x="780" y="66" fontSize="12" fontWeight="700" fill="#6B3B20">未来参考</text>
             </svg>
           </div>
           <div className="mt-6 grid gap-3 md:grid-cols-3">
             {forecastTrend.map((point) => (
               <div key={point.month} className="rounded-2xl border border-orange-100 bg-orange-50/70 px-4 py-3">
-                <p className="text-xs font-bold tracking-wide text-orange-700">预测窗口</p>
+                <p className="text-xs font-bold tracking-wide text-orange-700">未来参考</p>
                 <p className="mt-1 text-lg font-extrabold text-brand-brown">{point.label}</p>
-                <p className="mt-1 text-sm text-brand-gray">预计胜率</p>
+                <p className="mt-1 text-sm text-brand-gray">参考胜率</p>
                 <p className="text-2xl font-black text-orange-600">{point.winRate.toFixed(1)}%</p>
               </div>
             ))}
@@ -748,8 +748,8 @@ export function PlayerCareer() {
       ) : (
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8 text-center">
           <TrendingUp className="w-12 h-12 text-brand-200 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-text-main mb-2">暂无比赛记录</h2>
-          <p className="text-brand-gray text-sm">未能找到选手的比赛数据，无法生成生涯胜率趋势与里程碑。</p>
+          <h2 className="text-xl font-bold text-text-main mb-2">还没有比赛记录</h2>
+          <p className="text-brand-gray text-sm">暂时还看不到这位选手的走势和里程碑。</p>
         </div>
       )}
 
@@ -758,7 +758,7 @@ export function PlayerCareer() {
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-brand-100 p-8">
             <h2 className="text-xl font-bold text-text-main mb-6 flex items-center gap-2">
               <Users className="w-5 h-5 text-brand-500" />
-              <span>交手分布 (Top 5)</span>
+              <span>常见对手</span>
             </h2>
             <div className="space-y-4">
               {opponentStats.map((stat, idx) => (
@@ -831,7 +831,7 @@ export function PlayerCareer() {
         <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-brand-200 before:to-transparent">
           {matches.length === 0 ? (
             <div className="text-center py-12 text-text-sub">
-              <p>当前暂无该选手的比赛数据。</p>
+              <p>暂时还没有这位选手的比赛数据。</p>
               <p className="mt-2 text-sm text-brand-gray">{DATA_SOURCE_CONTACT_HINT}</p>
             </div>
           ) : (
